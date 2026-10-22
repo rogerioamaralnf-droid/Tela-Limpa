@@ -1,0 +1,29 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.rogerio.telalimpa'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.rogerio.telalimpa'
+        minSdk 21
+        targetSdk 33
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+// Sem dependências de propósito: nada de AndroidX/Kotlin, para o app ficar leve.
