@@ -17,7 +17,7 @@ final class Config {
      * Chave gratuita do TMDB (themoviedb.org) para as indicações de filmes e séries.
      * Cole a chave "API Key (v3 auth)" entre as aspas. Vazio = indicações desligadas.
      */
-    static final String TMDB_API_KEY = "";
+    static final String TMDB_API_KEY = "c6eed519fada8ef8b09a55e7438cd8e1";
 
     /** Apps marcados como favoritos na primeira abertura (nome exato, sem diferenciar maiúsculas). */
     static final String[] DEFAULT_FAVORITES = {
