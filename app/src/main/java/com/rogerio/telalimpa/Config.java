@@ -19,6 +19,9 @@ final class Config {
      */
     static final String TMDB_API_KEY = "c6eed519fada8ef8b09a55e7438cd8e1";
 
+    /** A cada quantos segundos a imagem de fundo troca (filmes e séries em alta). */
+    static final int BACKGROUND_SECONDS = 20;
+
     /** Apps marcados como favoritos na primeira abertura (nome exato, sem diferenciar maiúsculas). */
     static final String[] DEFAULT_FAVORITES = {
             "YouTube", "Netflix", "Globoplay", "Prime Video", "Disney+"

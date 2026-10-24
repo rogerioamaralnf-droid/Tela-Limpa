@@ -56,6 +56,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 /**
@@ -109,6 +110,8 @@ public class MainActivity extends Activity {
     private ScrollView scroll;
     private FrameLayout root;
     private ImageView bgImage;
+    private ImageView bgImage2;
+    private int slideIndex = -1;
     private String currentBackdrop = "";
     private volatile boolean backdropBusy = false;
     private long backdropTry = 0;
@@ -143,8 +146,15 @@ public class MainActivity extends Activity {
         public void run() {
             updateHeader();
             maybeRefresh();
-            updateBackdrop();
             handler.postDelayed(this, 60000);
+        }
+    };
+
+    private final Runnable slide = new Runnable() {
+        @Override
+        public void run() {
+            nextBackdrop();
+            handler.postDelayed(this, Config.BACKGROUND_SECONDS * 1000L);
         }
     };
 
@@ -185,6 +195,12 @@ public class MainActivity extends Activity {
         bgImage.setAlpha(0f);
         root.addView(bgImage, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // Segunda camada: a imagem nova aparece (fade) por cima da anterior
+        bgImage2 = new ImageView(this);
+        bgImage2.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bgImage2.setAlpha(0f);
+        root.addView(bgImage2, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         View scrim = new View(this);
         scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{0x4D000000, 0xB3000000}));
@@ -222,6 +238,8 @@ public class MainActivity extends Activity {
         super.onResume();
         handler.removeCallbacks(tick);
         handler.post(tick);
+        handler.removeCallbacks(slide);
+        handler.post(slide);
         if (goHome) {
             goHome = false;
             manageMode = false;
@@ -240,6 +258,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         handler.removeCallbacks(tick);
+        handler.removeCallbacks(slide);
     }
 
     @Override
@@ -559,26 +578,49 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ imagem de fundo
 
-    /** Usa a arte de um título em alta como fundo, trocando a cada 15 minutos. */
-    private void updateBackdrop() {
+    /** Artes de fundo dos títulos em alta, intercalando filmes e séries. */
+    private List<String> backdropList() {
+        List<String> movies = new ArrayList<>();
+        List<String> shows = new ArrayList<>();
+        List<String> out = new ArrayList<>();
         String raw = prefs.getString(KEY_RECS, null);
-        if (raw == null || backdropBusy) return;
+        if (raw == null) return out;
         try {
             JSONArray arr = new JSONArray(raw);
-            List<String> paths = new ArrayList<>();
             for (int i = 0; i < arr.length(); i++) {
-                String b = arr.getJSONObject(i).optString("backdrop", "");
-                if (!b.isEmpty()) paths.add(b);
-            }
-            if (paths.isEmpty()) return;
-            long now = System.currentTimeMillis();
-            String want = paths.get((int) ((now / (15L * 60 * 1000)) % paths.size()));
-            if (!want.equals(currentBackdrop) && now - backdropTry > RETRY_AFTER) {
-                backdropTry = now;
-                loadBackdrop(want);
+                JSONObject r = arr.optJSONObject(i);
+                if (r == null) continue;
+                String b = r.optString("backdrop", "");
+                if (b.isEmpty()) continue;
+                if ("tv".equals(r.optString("type"))) shows.add(b);
+                else movies.add(b);
             }
         } catch (Exception ignored) {
         }
+        int n = Math.max(movies.size(), shows.size());
+        for (int i = 0; i < n; i++) {
+            if (i < movies.size()) out.add(movies.get(i));
+            if (i < shows.size()) out.add(shows.get(i));
+        }
+        return out;
+    }
+
+    /** Passa para a próxima imagem da apresentação de fundo. */
+    private void nextBackdrop() {
+        if (backdropBusy) return;
+        List<String> list = backdropList();
+        if (list.isEmpty()) return;
+        if (slideIndex < 0) slideIndex = new Random().nextInt(list.size());
+        else slideIndex++;
+        String path = list.get(slideIndex % list.size());
+        if (path.equals(currentBackdrop) && list.size() > 1) {
+            slideIndex++;
+            path = list.get(slideIndex % list.size());
+        }
+        File f = new File(getCacheDir(), "back" + path.replace("/", "_"));
+        // Sem internet e sem a imagem guardada: espera um pouco antes de tentar de novo
+        if (!f.exists() && System.currentTimeMillis() - backdropTry < RETRY_AFTER) return;
+        loadBackdrop(path);
     }
 
     private void loadBackdrop(final String path) {
@@ -594,19 +636,32 @@ public class MainActivity extends Activity {
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                currentBackdrop = path;
-                                backdropTry = 0;
-                                bgImage.setImageBitmap(bmp);
-                                bgImage.setAlpha(0f);
-                                bgImage.animate().alpha(1f).setDuration(700).start();
+                                showBackdrop(bmp, path);
                             }
                         });
                     }
                 } catch (Exception ignored) {
                     // sem internet: mantém a imagem atual ou só o degradê
+                    backdropTry = System.currentTimeMillis();
                 } finally {
                     backdropBusy = false;
                 }
+            }
+        }).start();
+    }
+
+    /** Mostra a nova imagem com um fade suave por cima da anterior. */
+    private void showBackdrop(final Bitmap bmp, String path) {
+        currentBackdrop = path;
+        backdropTry = 0;
+        bgImage2.setImageBitmap(bmp);
+        bgImage2.setAlpha(0f);
+        bgImage2.animate().alpha(1f).setDuration(1500).withEndAction(new Runnable() {
+            @Override
+            public void run() {
+                bgImage.setImageBitmap(bmp);
+                bgImage.setAlpha(1f);
+                bgImage2.setAlpha(0f);
             }
         }).start();
     }
@@ -727,7 +782,7 @@ public class MainActivity extends Activity {
         if (prevTag != null) target = sectionsHost.findViewWithTag(prevTag);
         if (target == null) target = firstTile;
         if (target != null) target.requestFocus();
-        updateBackdrop();
+        if (currentBackdrop.isEmpty()) nextBackdrop();
     }
 
     private void addSection(String title) {
