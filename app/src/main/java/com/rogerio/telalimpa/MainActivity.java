@@ -11,6 +11,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
+import android.graphics.Outline;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.PorterDuff;
@@ -30,6 +31,8 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
+import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
@@ -68,7 +71,7 @@ public class MainActivity extends Activity {
     private static final String KEY_FAVS_INIT = "favorites_initialized";
     private static final String KEY_WEATHER = "weather_json";
     private static final String KEY_WEATHER_TIME = "weather_time";
-    private static final String KEY_RECS = "recs_json";
+    private static final String KEY_RECS = "recs_json_v2";
     private static final String KEY_RECS_TIME = "recs_time";
     private static final String USE_PREFIX = "use_";
 
@@ -98,6 +101,11 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private ScrollView scroll;
+    private FrameLayout root;
+    private ImageView bgImage;
+    private String currentBackdrop = "";
+    private volatile boolean backdropBusy = false;
+    private long backdropTry = 0;
     private LinearLayout sectionsHost;
     private TextView greetingView;
     private TextView dateView;
@@ -129,6 +137,7 @@ public class MainActivity extends Activity {
         public void run() {
             updateHeader();
             maybeRefresh();
+            updateBackdrop();
             handler.postDelayed(this, 60000);
         }
     };
@@ -145,7 +154,7 @@ public class MainActivity extends Activity {
         columns = Math.max(4, Math.min(10, (int) ((widthDp - 96) / (TILE_W + 8))));
 
         scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.BLACK);
+        scroll.setBackgroundColor(Color.TRANSPARENT);
         scroll.setVerticalScrollBarEnabled(false);
         scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
@@ -157,10 +166,28 @@ public class MainActivity extends Activity {
 
         sectionsHost = new LinearLayout(this);
         sectionsHost.setOrientation(LinearLayout.VERTICAL);
+        sectionsHost.setClipChildren(false);
+        content.setClipChildren(false);
         content.addView(sectionsHost);
 
         scroll.addView(content);
-        setContentView(scroll);
+
+        // Fundo: degradê do período do dia + imagem de um título em alta (quando houver)
+        root = new FrameLayout(this);
+        bgImage = new ImageView(this);
+        bgImage.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bgImage.setAlpha(0f);
+        root.addView(bgImage, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        View scrim = new View(this);
+        scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0x4D000000, 0xB3000000}));
+        root.addView(scrim, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(scroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(root);
+        updateHeader();
     }
 
     @Override
@@ -246,7 +273,7 @@ public class MainActivity extends Activity {
 
         greetingView = new TextView(this);
         greetingView.setTextColor(0xFFE0E0E0);
-        greetingView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        greetingView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
         left.addView(greetingView);
 
         LinearLayout timeRow = new LinearLayout(this);
@@ -303,6 +330,10 @@ public class MainActivity extends Activity {
         header.addView(right, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        for (TextView tv : new TextView[]{greetingView, clock, dateView, tempView, descView, rangeView, city}) {
+            tv.setShadowLayer(6f, 0f, 2f, 0xAA000000);
+        }
+
         updateHeader();
         updateWeatherViews();
         return header;
@@ -311,6 +342,25 @@ public class MainActivity extends Activity {
     private void updateHeader() {
         greetingView.setText(greeting());
         dateView.setText(dateString());
+        if (root != null) root.setBackground(timeGradient());
+    }
+
+    /** Degradê de fundo conforme o período do dia (aparece quando não há imagem). */
+    private Drawable timeGradient() {
+        int h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
+        int a;
+        int b;
+        if (h >= 5 && h < 12) {
+            a = 0xFFE8825A;
+            b = 0xFF2E5E8C;
+        } else if (h >= 12 && h < 18) {
+            a = 0xFF2D7DD2;
+            b = 0xFF1B3A6B;
+        } else {
+            a = 0xFF3B2A78;
+            b = 0xFF0B0B24;
+        }
+        return new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{a, b});
     }
 
     private String greeting() {
@@ -439,6 +489,8 @@ public class MainActivity extends Activity {
                         o.put("title", r.has("title") ? r.optString("title") : r.optString("name"));
                         o.put("type", type);
                         o.put("poster", poster);
+                        String back = r.optString("backdrop_path", "");
+                        o.put("backdrop", "null".equals(back) ? "" : back);
                         o.put("rating", r.optDouble("vote_average", 0));
                         o.put("overview", r.optString("overview", ""));
                         String date = r.optString("release_date", r.optString("first_air_date", ""));
@@ -492,6 +544,60 @@ public class MainActivity extends Activity {
                     }
                 } catch (Exception ignored) {
                     // sem internet: o pôster fica em branco
+                }
+            }
+        }).start();
+    }
+
+    // ------------------------------------------------------------ imagem de fundo
+
+    /** Usa a arte de um título em alta como fundo, trocando a cada 15 minutos. */
+    private void updateBackdrop() {
+        String raw = prefs.getString(KEY_RECS, null);
+        if (raw == null || backdropBusy) return;
+        try {
+            JSONArray arr = new JSONArray(raw);
+            List<String> paths = new ArrayList<>();
+            for (int i = 0; i < arr.length(); i++) {
+                String b = arr.getJSONObject(i).optString("backdrop", "");
+                if (!b.isEmpty()) paths.add(b);
+            }
+            if (paths.isEmpty()) return;
+            long now = System.currentTimeMillis();
+            String want = paths.get((int) ((now / (15L * 60 * 1000)) % paths.size()));
+            if (!want.equals(currentBackdrop) && now - backdropTry > RETRY_AFTER) {
+                backdropTry = now;
+                loadBackdrop(want);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void loadBackdrop(final String path) {
+        backdropBusy = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    File f = new File(getCacheDir(), "back" + path.replace("/", "_"));
+                    if (!f.exists()) Net.download("https://image.tmdb.org/t/p/w780" + path, f);
+                    final Bitmap bmp = BitmapFactory.decodeFile(f.getAbsolutePath());
+                    if (bmp != null) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                currentBackdrop = path;
+                                backdropTry = 0;
+                                bgImage.setImageBitmap(bmp);
+                                bgImage.setAlpha(0f);
+                                bgImage.animate().alpha(1f).setDuration(700).start();
+                            }
+                        });
+                    }
+                } catch (Exception ignored) {
+                    // sem internet: mantém a imagem atual ou só o degradê
+                } finally {
+                    backdropBusy = false;
                 }
             }
         }).start();
@@ -607,13 +713,15 @@ public class MainActivity extends Activity {
         if (prevTag != null) target = sectionsHost.findViewWithTag(prevTag);
         if (target == null) target = firstTile;
         if (target != null) target.requestFocus();
+        updateBackdrop();
     }
 
     private void addSection(String title) {
         TextView t = new TextView(this);
         t.setText(title);
-        t.setTextColor(0xFF9E9E9E);
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        t.setTextColor(0xFFEEEEEE);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        t.setShadowLayer(6f, 0f, 2f, 0xAA000000);
         t.setPadding(0, dp(22), 0, dp(8));
         sectionsHost.addView(t);
     }
@@ -621,6 +729,7 @@ public class MainActivity extends Activity {
     private View tileRow(List<Entry> list, String section) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setClipChildren(false);
         for (Entry e : list) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     dp(TILE_W), ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -633,6 +742,7 @@ public class MainActivity extends Activity {
     private View allGrid() {
         GridLayout g = new GridLayout(this);
         g.setColumnCount(columns);
+        g.setClipChildren(false);
 
         List<Entry> all = new ArrayList<>();
         for (Entry e : apps) {
@@ -661,6 +771,7 @@ public class MainActivity extends Activity {
         item.setClickable(true);
         item.setBackground(focusBackground());
         item.setTag(section + ":" + (e.kind == KIND_APP ? e.pkg : "k" + e.kind));
+        addFocusZoom(item);
 
         ImageView icon = new ImageView(this);
         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -731,8 +842,12 @@ public class MainActivity extends Activity {
         HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
         hs.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        hs.setClipToPadding(false);
+        hs.setClipChildren(false);
+        hs.setPadding(dp(6), dp(10), dp(6), dp(10));
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setClipChildren(false);
         for (int i = 0; i < arr.length(); i++) {
             JSONObject r = arr.optJSONObject(i);
             if (r == null) continue;
@@ -753,10 +868,18 @@ public class MainActivity extends Activity {
         item.setClickable(true);
         item.setBackground(focusBackground());
         item.setTag("rec:" + r.optLong("id"));
+        addFocusZoom(item);
 
         ImageView poster = new ImageView(this);
         poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
         poster.setBackgroundColor(0xFF1E1E1E);
+        poster.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(10));
+            }
+        });
+        poster.setClipToOutline(true);
         item.addView(poster, new LinearLayout.LayoutParams(dp(112), dp(168)));
 
         TextView title = new TextView(this);
@@ -781,13 +904,27 @@ public class MainActivity extends Activity {
 
     private Drawable focusBackground() {
         GradientDrawable focused = new GradientDrawable();
-        focused.setColor(0x33FFFFFF);
+        focused.setColor(0x44FFFFFF);
         focused.setStroke(dp(2), Color.WHITE);
         focused.setCornerRadius(dp(12));
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(0x26FFFFFF);
+        normal.setCornerRadius(dp(12));
         StateListDrawable s = new StateListDrawable();
         s.addState(new int[]{android.R.attr.state_focused}, focused);
-        s.addState(new int[]{}, new ColorDrawable(Color.TRANSPARENT));
+        s.addState(new int[]{}, normal);
         return s;
+    }
+
+    /** Dá um leve "zoom" no item que está com o foco do controle remoto. */
+    private void addFocusZoom(View v) {
+        v.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View view, boolean hasFocus) {
+                float s = hasFocus ? 1.07f : 1f;
+                view.animate().scaleX(s).scaleY(s).setDuration(120).start();
+            }
+        });
     }
 
     private int dp(int v) {
