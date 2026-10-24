@@ -14,8 +14,10 @@ e apenas para o clima (Open-Meteo) e as indicações (TMDB). Nenhuma biblioteca 
 
 ## Controle remoto
 - **OK** num app: abre.
-- **Organizar** (ou tecla Menu): clique num app para alternar **Normal → ★ Favorito → Oculto → Normal**.
-  Clique em **Concluir** (ou Voltar) para sair.
+- **Organizar** (ou tecla Menu): clique num app e escolha **Mover**, **Favorito** ou **Ocultar**.
+  Em **Mover**, use as setas do controle para mudar o app de lugar e aperte **OK** para confirmar.
+  A ordem fica salva. Clique em **Concluir** (ou Voltar) para sair.
+- O fundo passa, com transição suave, pelas artes de filmes e séries em alta (`BACKGROUND_SECONDS` no `Config.java`).
 - Na primeira abertura, YouTube, Netflix, Globoplay, Prime Video e Disney+ (se instalados) já vêm como favoritos.
 
 ## Personalizar (arquivo `app/src/main/java/com/rogerio/telalimpa/Config.java`)

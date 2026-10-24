@@ -48,6 +48,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
@@ -70,6 +71,7 @@ public class MainActivity extends Activity {
     private static final String KEY_HIDDEN = "hidden_packages";
     private static final String KEY_FAVS = "favorite_packages";
     private static final String KEY_FAVS_INIT = "favorites_initialized";
+    private static final String KEY_ORDER = "app_order";
     private static final String KEY_WEATHER = "weather_json";
     private static final String KEY_WEATHER_TIME = "weather_time";
     private static final String KEY_RECS = "recs_json_v3";
@@ -124,6 +126,7 @@ public class MainActivity extends Activity {
 
     private List<Entry> apps = new ArrayList<>();
     private boolean manageMode = false;
+    private String movingPkg = null;
     private boolean goHome = false;
     private int columns = 6;
     private View firstTile;
@@ -242,6 +245,7 @@ public class MainActivity extends Activity {
         handler.post(slide);
         if (goHome) {
             goHome = false;
+            movingPkg = null;
             manageMode = false;
             render();
             if (firstTile != null) firstTile.requestFocus();
@@ -272,6 +276,7 @@ public class MainActivity extends Activity {
     public void onBackPressed() {
         // Launcher não "fecha"; só sai do modo Organizar
         if (manageMode) {
+            movingPkg = null;
             manageMode = false;
             render();
         }
@@ -280,6 +285,7 @@ public class MainActivity extends Activity {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_MENU) {
+            movingPkg = null;
             manageMode = !manageMode;
             render();
             return true;
@@ -680,6 +686,17 @@ public class MainActivity extends Activity {
         List<Entry> list = new ArrayList<>(byPkg.values());
         Collections.sort(list, (a, b) -> a.label.compareToIgnoreCase(b.label));
 
+        // Ordem escolhida por você no modo Organizar (apps novos entram no fim, em ordem alfabética)
+        String savedOrder = prefs.getString(KEY_ORDER, "");
+        if (!savedOrder.isEmpty()) {
+            final List<String> order = Arrays.asList(savedOrder.split("\n"));
+            Collections.sort(list, (a, b) -> {
+                int ia = order.indexOf(a.pkg);
+                int ib = order.indexOf(b.pkg);
+                return Integer.compare(ia < 0 ? Integer.MAX_VALUE : ia, ib < 0 ? Integer.MAX_VALUE : ib);
+            });
+        }
+
         if (!prefs.getBoolean(KEY_FAVS_INIT, false) && !list.isEmpty()) {
             for (Entry e : list) {
                 for (String name : Config.DEFAULT_FAVORITES) {
@@ -737,8 +754,13 @@ public class MainActivity extends Activity {
 
         if (manageMode) {
             TextView hint = new TextView(this);
-            hint.setText("Modo Organizar: clique num app para alternar entre Normal, ★ Favorito e Oculto. "
-                    + "Clique em Concluir (ou aperte Voltar) para sair.");
+            if (movingPkg != null) {
+                hint.setText("Movendo: use as setas do controle para mudar o app de lugar "
+                        + "e aperte OK para confirmar.");
+            } else {
+                hint.setText("Modo Organizar: clique num app para escolher Mover, Favorito ou Ocultar. "
+                        + "Clique em Concluir (ou aperte Voltar) para sair.");
+            }
             hint.setTextColor(0xFFFFC107);
             hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
             hint.setPadding(0, dp(20), 0, 0);
@@ -897,6 +919,7 @@ public class MainActivity extends Activity {
             if (manageMode) {
                 if (e.favorite) text = "★ " + text;
                 else if (e.hidden) text = text + " · oculto";
+                if (e.pkg.equals(movingPkg)) text = "↔ " + text;
             }
             label.setText(text);
             item.setAlpha(e.hidden ? 0.4f : 1f);
@@ -1067,33 +1090,129 @@ public class MainActivity extends Activity {
                 }
                 break;
             case KIND_ORGANIZE:
+                movingPkg = null;
                 manageMode = !manageMode;
                 render();
                 break;
             default:
                 if (manageMode) {
-                    cycleState(e);
+                    showAppOptions(e);
                 } else {
                     launch(e);
                 }
         }
     }
 
-    /** Organizar: Normal -> Favorito -> Oculto -> Normal. */
-    private void cycleState(Entry e) {
+    /** Organizar: menu com as opções do app. */
+    private void showAppOptions(final Entry e) {
+        final String[] items = {
+                "Mover (mudar de posição)",
+                e.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos",
+                e.hidden ? "Mostrar na tela" : "Ocultar da tela"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle(e.label)
+                .setItems(items, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        if (which == 0) {
+                            movingPkg = e.pkg;
+                            render();
+                        } else if (which == 1) {
+                            toggleFavorite(e);
+                        } else {
+                            toggleHidden(e);
+                        }
+                    }
+                })
+                .show();
+    }
+
+    private void toggleFavorite(Entry e) {
         Set<String> favs = stringSet(KEY_FAVS);
         Set<String> hid = stringSet(KEY_HIDDEN);
         if (favs.contains(e.pkg)) {
             favs.remove(e.pkg);
-            hid.add(e.pkg);
-        } else if (hid.contains(e.pkg)) {
-            hid.remove(e.pkg);
         } else {
             favs.add(e.pkg);
+            hid.remove(e.pkg);
         }
+        saveFlags(e, favs, hid);
+    }
+
+    private void toggleHidden(Entry e) {
+        Set<String> favs = stringSet(KEY_FAVS);
+        Set<String> hid = stringSet(KEY_HIDDEN);
+        if (hid.contains(e.pkg)) {
+            hid.remove(e.pkg);
+        } else {
+            hid.add(e.pkg);
+            favs.remove(e.pkg);
+        }
+        saveFlags(e, favs, hid);
+    }
+
+    private void saveFlags(Entry e, Set<String> favs, Set<String> hid) {
         prefs.edit().putStringSet(KEY_FAVS, favs).putStringSet(KEY_HIDDEN, hid).apply();
         e.favorite = favs.contains(e.pkg);
         e.hidden = hid.contains(e.pkg);
+        render();
+    }
+
+    /** Enquanto um app está sendo movido, as setas mudam o lugar dele e OK confirma. */
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (manageMode && movingPkg != null) {
+            int delta;
+            switch (event.getKeyCode()) {
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                    delta = -1;
+                    break;
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    delta = 1;
+                    break;
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    delta = -columns;
+                    break;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    delta = columns;
+                    break;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                case KeyEvent.KEYCODE_BACK:
+                    if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                        movingPkg = null;
+                        render();
+                    }
+                    return true;
+                default:
+                    return super.dispatchKeyEvent(event);
+            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN) moveApp(delta);
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    private void moveApp(int delta) {
+        int from = -1;
+        for (int i = 0; i < apps.size(); i++) {
+            if (apps.get(i).pkg.equals(movingPkg)) {
+                from = i;
+                break;
+            }
+        }
+        if (from < 0) return;
+        int to = Math.max(0, Math.min(apps.size() - 1, from + delta));
+        if (to == from) return;
+        Entry moved = apps.remove(from);
+        apps.add(to, moved);
+        StringBuilder sb = new StringBuilder();
+        for (Entry x : apps) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(x.pkg);
+        }
+        prefs.edit().putString(KEY_ORDER, sb.toString()).apply();
         render();
     }
 
