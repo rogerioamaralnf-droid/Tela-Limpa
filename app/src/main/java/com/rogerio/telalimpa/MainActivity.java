@@ -71,15 +71,19 @@ public class MainActivity extends Activity {
     private static final String KEY_FAVS_INIT = "favorites_initialized";
     private static final String KEY_WEATHER = "weather_json";
     private static final String KEY_WEATHER_TIME = "weather_time";
-    private static final String KEY_RECS = "recs_json_v2";
-    private static final String KEY_RECS_TIME = "recs_time";
+    private static final String KEY_RECS = "recs_json_v3";
+    private static final String KEY_RECS_TIME = "recs_time_v3";
     private static final String USE_PREFIX = "use_";
 
     private static final long WEATHER_EVERY = 30L * 60 * 1000;
     private static final long RECS_EVERY = 6L * 60 * 60 * 1000;
     private static final long RETRY_AFTER = 5L * 60 * 1000;
 
-    private static final int TILE_W = 104; // dp
+    // Cartões retangulares (proporção 16:9), em dp
+    private static final int TILE_W = 148;
+    private static final int TILE_H = 83;
+    private static final int BIG_W = 224;
+    private static final int BIG_H = 126;
 
     private static final int KIND_APP = 0;
     private static final int KIND_SETTINGS = 1;
@@ -92,6 +96,8 @@ public class MainActivity extends Activity {
         ComponentName component;
         ResolveInfo info;
         Drawable icon;
+        Drawable banner;
+        boolean bannerLoaded;
         int iconRes;
         boolean hidden;
         boolean favorite;
@@ -151,7 +157,7 @@ public class MainActivity extends Activity {
 
         float density = getResources().getDisplayMetrics().density;
         float widthDp = getResources().getDisplayMetrics().widthPixels / density;
-        columns = Math.max(4, Math.min(10, (int) ((widthDp - 96) / (TILE_W + 8))));
+        columns = Math.max(3, Math.min(10, (int) ((widthDp - 96) / (TILE_W + 16))));
 
         scroll = new ScrollView(this);
         scroll.setBackgroundColor(Color.TRANSPARENT);
@@ -474,29 +480,31 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 try {
-                    String url = "https://api.themoviedb.org/3/trending/all/week?language=pt-BR&api_key="
-                            + Config.TMDB_API_KEY;
-                    JSONArray results = new JSONObject(Net.get(url)).getJSONArray("results");
                     JSONArray out = new JSONArray();
-                    for (int i = 0; i < results.length(); i++) {
-                        JSONObject r = results.getJSONObject(i);
-                        String poster = r.optString("poster_path", "");
-                        String type = r.optString("media_type", "");
-                        if (poster.isEmpty() || "null".equals(poster)) continue;
-                        if (!type.equals("movie") && !type.equals("tv")) continue;
-                        JSONObject o = new JSONObject();
-                        o.put("id", r.getLong("id"));
-                        o.put("title", r.has("title") ? r.optString("title") : r.optString("name"));
-                        o.put("type", type);
-                        o.put("poster", poster);
-                        String back = r.optString("backdrop_path", "");
-                        o.put("backdrop", "null".equals(back) ? "" : back);
-                        o.put("rating", r.optDouble("vote_average", 0));
-                        o.put("overview", r.optString("overview", ""));
-                        String date = r.optString("release_date", r.optString("first_air_date", ""));
-                        o.put("year", date.length() >= 4 ? date.substring(0, 4) : "");
-                        out.put(o);
-                        if (out.length() >= 12) break;
+                    String[] kinds = {"movie", "tv"};
+                    for (String type : kinds) {
+                        String url = "https://api.themoviedb.org/3/trending/" + type
+                                + "/week?language=pt-BR&api_key=" + Config.TMDB_API_KEY;
+                        JSONArray results = new JSONObject(Net.get(url)).getJSONArray("results");
+                        int added = 0;
+                        for (int i = 0; i < results.length() && added < 12; i++) {
+                            JSONObject r = results.getJSONObject(i);
+                            String poster = r.optString("poster_path", "");
+                            if (poster.isEmpty() || "null".equals(poster)) continue;
+                            JSONObject o = new JSONObject();
+                            o.put("id", r.getLong("id"));
+                            o.put("title", r.has("title") ? r.optString("title") : r.optString("name"));
+                            o.put("type", type);
+                            o.put("poster", poster);
+                            String back = r.optString("backdrop_path", "");
+                            o.put("backdrop", "null".equals(back) ? "" : back);
+                            o.put("rating", r.optDouble("vote_average", 0));
+                            o.put("overview", r.optString("overview", ""));
+                            String date = r.optString("release_date", r.optString("first_air_date", ""));
+                            o.put("year", date.length() >= 4 ? date.substring(0, 4) : "");
+                            out.put(o);
+                            added++;
+                        }
                     }
                     recsFailed = false;
                     prefs.edit()
@@ -685,10 +693,9 @@ public class MainActivity extends Activity {
             for (Entry e : apps) {
                 if (e.favorite && !e.hidden) favs.add(e);
             }
-            if (favs.size() > columns) favs = new ArrayList<>(favs.subList(0, columns));
             if (!favs.isEmpty()) {
                 addSection("Favoritos");
-                sectionsHost.addView(tileRow(favs, "fav"));
+                sectionsHost.addView(scrollRow(tileRow(favs, "fav", true)));
             }
 
             List<Entry> top = new ArrayList<>();
@@ -699,11 +706,18 @@ public class MainActivity extends Activity {
             if (top.size() > columns) top = new ArrayList<>(top.subList(0, columns));
             if (!top.isEmpty()) {
                 addSection("Mais usados");
-                sectionsHost.addView(tileRow(top, "top"));
+                sectionsHost.addView(tileRow(top, "top", false));
             }
 
-            addSection("Indicações da semana");
-            sectionsHost.addView(recsRow());
+            if (Config.TMDB_API_KEY.isEmpty()) {
+                addSection("Filmes e séries");
+                sectionsHost.addView(recsRow("movie"));
+            } else {
+                addSection("Filmes em alta");
+                sectionsHost.addView(recsRow("movie"));
+                addSection("Séries em alta");
+                sectionsHost.addView(recsRow("tv"));
+            }
         }
 
         addSection(manageMode ? "Organizar apps" : "Todos os apps");
@@ -726,17 +740,29 @@ public class MainActivity extends Activity {
         sectionsHost.addView(t);
     }
 
-    private View tileRow(List<Entry> list, String section) {
+    private LinearLayout tileRow(List<Entry> list, String section, boolean big) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setClipChildren(false);
         for (Entry e : list) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    dp(TILE_W), ViewGroup.LayoutParams.WRAP_CONTENT);
+                    dp((big ? BIG_W : TILE_W) + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.rightMargin = dp(8);
-            row.addView(appTile(e, section), lp);
+            row.addView(appTile(e, section, big), lp);
         }
         return row;
+    }
+
+    /** Linha que rola na horizontal, sem cortar o zoom do item selecionado. */
+    private View scrollRow(LinearLayout row) {
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        hs.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        hs.setClipToPadding(false);
+        hs.setClipChildren(false);
+        hs.setPadding(dp(6), dp(10), dp(6), dp(10));
+        hs.addView(row);
+        return hs;
     }
 
     private View allGrid() {
@@ -754,40 +780,64 @@ public class MainActivity extends Activity {
 
         for (Entry e : all) {
             GridLayout.LayoutParams lp = new GridLayout.LayoutParams();
-            lp.width = dp(TILE_W);
+            lp.width = dp(TILE_W + 8);
             lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
             lp.setMargins(0, 0, dp(8), dp(8));
-            g.addView(appTile(e, "all"), lp);
+            g.addView(appTile(e, "all", false), lp);
         }
         return g;
     }
 
-    private View appTile(final Entry e, String section) {
+    private View appTile(final Entry e, String section, boolean big) {
+        int w = big ? BIG_W : TILE_W;
+        int h = big ? BIG_H : TILE_H;
+
         LinearLayout item = new LinearLayout(this);
         item.setOrientation(LinearLayout.VERTICAL);
         item.setGravity(Gravity.CENTER_HORIZONTAL);
-        item.setPadding(dp(6), dp(10), dp(6), dp(8));
+        item.setPadding(dp(4), dp(4), dp(4), dp(6));
         item.setFocusable(true);
         item.setClickable(true);
         item.setBackground(focusBackground());
         item.setTag(section + ":" + (e.kind == KIND_APP ? e.pkg : "k" + e.kind));
         addFocusZoom(item);
 
-        ImageView icon = new ImageView(this);
-        icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        // Cartão retangular de cantos arredondados
+        ImageView card = new ImageView(this);
+        roundCorners(card, 12);
 
         TextView label = new TextView(this);
         label.setTextColor(Color.WHITE);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, big ? 15 : 13);
+        label.setShadowLayer(4f, 0f, 1f, 0xAA000000);
         label.setSingleLine(true);
         label.setEllipsize(TextUtils.TruncateAt.END);
         label.setGravity(Gravity.CENTER);
         label.setPadding(0, dp(6), 0, 0);
 
         if (e.kind == KIND_APP) {
-            if (e.icon == null) e.icon = e.info.loadIcon(getPackageManager());
-            Drawable.ConstantState cs = e.icon.getConstantState();
-            icon.setImageDrawable(cs != null ? cs.newDrawable(getResources()) : e.icon);
+            if (!e.bannerLoaded) {
+                e.bannerLoaded = true;
+                try {
+                    e.banner = e.info.activityInfo.loadBanner(getPackageManager());
+                } catch (Exception ex) {
+                    e.banner = null;
+                }
+            }
+            if (e.banner != null) {
+                // Apps de TV costumam trazer um banner 16:9 pronto
+                Drawable.ConstantState bs = e.banner.getConstantState();
+                card.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                card.setImageDrawable(bs != null ? bs.newDrawable(getResources()) : e.banner);
+            } else {
+                if (e.icon == null) e.icon = e.info.loadIcon(getPackageManager());
+                Drawable.ConstantState cs = e.icon.getConstantState();
+                card.setBackground(cardBackground());
+                card.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                int pad = dp(h * 18 / 100);
+                card.setPadding(pad, pad, pad, pad);
+                card.setImageDrawable(cs != null ? cs.newDrawable(getResources()) : e.icon);
+            }
             String text = e.label;
             if (manageMode) {
                 if (e.favorite) text = "★ " + text;
@@ -796,13 +846,16 @@ public class MainActivity extends Activity {
             label.setText(text);
             item.setAlpha(e.hidden ? 0.4f : 1f);
         } else {
-            icon.setImageResource(e.iconRes);
-            icon.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN);
-            icon.setPadding(dp(14), dp(14), dp(14), dp(14));
+            card.setBackground(cardBackground());
+            card.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            int pad = dp(h * 24 / 100);
+            card.setPadding(pad, pad, pad, pad);
+            card.setImageResource(e.iconRes);
+            card.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN);
             label.setText(e.label);
         }
 
-        item.addView(icon, new LinearLayout.LayoutParams(dp(60), dp(60)));
+        item.addView(card, new LinearLayout.LayoutParams(dp(w), dp(h)));
         item.addView(label, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         item.setOnClickListener(new View.OnClickListener() {
@@ -815,7 +868,7 @@ public class MainActivity extends Activity {
         return item;
     }
 
-    private View recsRow() {
+    private View recsRow(String type) {
         JSONArray arr = null;
         String raw = prefs.getString(KEY_RECS, null);
         if (raw != null) {
@@ -825,7 +878,14 @@ public class MainActivity extends Activity {
                 arr = null;
             }
         }
-        if (arr == null || arr.length() == 0) {
+        List<JSONObject> items = new ArrayList<>();
+        if (arr != null) {
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject r = arr.optJSONObject(i);
+                if (r != null && type.equals(r.optString("type"))) items.add(r);
+            }
+        }
+        if (items.isEmpty()) {
             TextView t = new TextView(this);
             t.setTextColor(0xFF9E9E9E);
             t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
@@ -839,24 +899,16 @@ public class MainActivity extends Activity {
             return t;
         }
 
-        HorizontalScrollView hs = new HorizontalScrollView(this);
-        hs.setHorizontalScrollBarEnabled(false);
-        hs.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        hs.setClipToPadding(false);
-        hs.setClipChildren(false);
-        hs.setPadding(dp(6), dp(10), dp(6), dp(10));
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setClipChildren(false);
-        for (int i = 0; i < arr.length(); i++) {
-            JSONObject r = arr.optJSONObject(i);
-            if (r == null) continue;
+        for (JSONObject r : items) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.rightMargin = dp(10);
             row.addView(posterTile(r), lp);
         }
-        hs.addView(row);
+        View hs = scrollRow(row);
         return hs;
     }
 
@@ -867,7 +919,7 @@ public class MainActivity extends Activity {
         item.setFocusable(true);
         item.setClickable(true);
         item.setBackground(focusBackground());
-        item.setTag("rec:" + r.optLong("id"));
+        item.setTag("rec:" + r.optString("type") + r.optLong("id"));
         addFocusZoom(item);
 
         ImageView poster = new ImageView(this);
@@ -880,7 +932,7 @@ public class MainActivity extends Activity {
             }
         });
         poster.setClipToOutline(true);
-        item.addView(poster, new LinearLayout.LayoutParams(dp(112), dp(168)));
+        item.addView(poster, new LinearLayout.LayoutParams(dp(124), dp(186)));
 
         TextView title = new TextView(this);
         title.setText(r.optString("title"));
@@ -889,7 +941,7 @@ public class MainActivity extends Activity {
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         title.setPadding(0, dp(6), 0, 0);
-        item.addView(title, new LinearLayout.LayoutParams(dp(112), ViewGroup.LayoutParams.WRAP_CONTENT));
+        item.addView(title, new LinearLayout.LayoutParams(dp(124), ViewGroup.LayoutParams.WRAP_CONTENT));
 
         item.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -906,14 +958,30 @@ public class MainActivity extends Activity {
         GradientDrawable focused = new GradientDrawable();
         focused.setColor(0x44FFFFFF);
         focused.setStroke(dp(2), Color.WHITE);
-        focused.setCornerRadius(dp(12));
-        GradientDrawable normal = new GradientDrawable();
-        normal.setColor(0x26FFFFFF);
-        normal.setCornerRadius(dp(12));
+        focused.setCornerRadius(dp(16));
+        ColorDrawable normal = new ColorDrawable(Color.TRANSPARENT);
         StateListDrawable s = new StateListDrawable();
         s.addState(new int[]{android.R.attr.state_focused}, focused);
         s.addState(new int[]{}, normal);
         return s;
+    }
+
+    private void roundCorners(View v, final int radiusDp) {
+        v.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), dp(radiusDp));
+            }
+        });
+        v.setClipToOutline(true);
+    }
+
+    /** Fundo escuro translúcido para ícones que não têm banner. */
+    private Drawable cardBackground() {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(0xB3141A26);
+        g.setCornerRadius(dp(12));
+        return g;
     }
 
     /** Dá um leve "zoom" no item que está com o foco do controle remoto. */
@@ -921,7 +989,7 @@ public class MainActivity extends Activity {
         v.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View view, boolean hasFocus) {
-                float s = hasFocus ? 1.07f : 1f;
+                float s = hasFocus ? 1.05f : 1f;
                 view.animate().scaleX(s).scaleY(s).setDuration(120).start();
             }
         });
