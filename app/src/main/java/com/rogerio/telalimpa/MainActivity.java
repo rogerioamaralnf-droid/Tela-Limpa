@@ -2,6 +2,7 @@ package com.rogerio.telalimpa;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.role.RoleManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -21,6 +22,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -75,7 +77,8 @@ public class MainActivity extends Activity {
     private static final String KEY_WEATHER = "weather_json";
     private static final String KEY_WEATHER_TIME = "weather_time";
     private static final String KEY_RECS = "recs_json_v3";
-    private static final String KEY_RECS_TIME = "recs_time_v3";
+    private static final String KEY_RECS_TIME = "recs_time_v4";
+    private static final String KEY_BG = "bg_json_v1";
     private static final String USE_PREFIX = "use_";
 
     private static final long WEATHER_EVERY = 30L * 60 * 1000;
@@ -91,6 +94,7 @@ public class MainActivity extends Activity {
     private static final int KIND_APP = 0;
     private static final int KIND_SETTINGS = 1;
     private static final int KIND_ORGANIZE = 2;
+    private static final int KIND_DEFAULT = 3;
 
     private static class Entry {
         int kind;
@@ -120,6 +124,8 @@ public class MainActivity extends Activity {
     private LinearLayout sectionsHost;
     private TextView greetingView;
     private TextView dateView;
+    private TextView captionView;
+    private TextView defaultHintView;
     private TextView tempView;
     private TextView descView;
     private TextView rangeView;
@@ -326,6 +332,25 @@ public class MainActivity extends Activity {
         timeRow.addView(dateView);
         left.addView(timeRow);
 
+        // Título do filme/série que está no fundo agora
+        captionView = new TextView(this);
+        captionView.setTextColor(0xFFDDDDDD);
+        captionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        captionView.setSingleLine(true);
+        captionView.setEllipsize(TextUtils.TruncateAt.END);
+        captionView.setAlpha(0f);
+        captionView.setPadding(0, dp(2), 0, 0);
+        left.addView(captionView);
+
+        defaultHintView = new TextView(this);
+        defaultHintView.setTextColor(0xFFFFC107);
+        defaultHintView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        defaultHintView.setText("A Tela Limpa ainda não é a tela inicial padrão. "
+                + "Clique em \"Tornar padrão\" no fim da lista de apps.");
+        defaultHintView.setPadding(0, dp(6), 0, 0);
+        defaultHintView.setVisibility(View.GONE);
+        left.addView(defaultHintView);
+
         header.addView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         LinearLayout right = new LinearLayout(this);
@@ -361,7 +386,7 @@ public class MainActivity extends Activity {
         header.addView(right, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        for (TextView tv : new TextView[]{greetingView, clock, dateView, tempView, descView, rangeView, city}) {
+        for (TextView tv : new TextView[]{greetingView, clock, dateView, captionView, tempView, descView, rangeView, city}) {
             tv.setShadowLayer(6f, 0f, 2f, 0xAA000000);
         }
 
@@ -531,6 +556,37 @@ public class MainActivity extends Activity {
                             added++;
                         }
                     }
+                    // Lançamentos recentes para o fundo: filmes em cartaz e séries no ar
+                    try {
+                        JSONArray bg = new JSONArray();
+                        String[][] src = {
+                                {"movie", "/movie/now_playing?language=pt-BR&region=BR&page=1", "Em cartaz"},
+                                {"tv", "/tv/on_the_air?language=pt-BR&page=1", "Série no ar"}
+                        };
+                        for (String[] s : src) {
+                            String u = "https://api.themoviedb.org/3" + s[1]
+                                    + "&api_key=" + Config.TMDB_API_KEY;
+                            JSONArray res = new JSONObject(Net.get(u)).getJSONArray("results");
+                            int n = 0;
+                            for (int i = 0; i < res.length() && n < 12; i++) {
+                                JSONObject r = res.getJSONObject(i);
+                                String back = r.optString("backdrop_path", "");
+                                if (back.isEmpty() || "null".equals(back)) continue;
+                                JSONObject o = new JSONObject();
+                                o.put("type", s[0]);
+                                o.put("label", s[2]);
+                                o.put("title", r.has("title") ? r.optString("title") : r.optString("name"));
+                                o.put("backdrop", back);
+                                String d = r.optString("release_date", r.optString("first_air_date", ""));
+                                o.put("year", d.length() >= 4 ? d.substring(0, 4) : "");
+                                bg.put(o);
+                                n++;
+                            }
+                        }
+                        prefs.edit().putString(KEY_BG, bg.toString()).apply();
+                    } catch (Exception ignoredBg) {
+                        // sem os lançamentos, o fundo usa os títulos em alta
+                    }
                     recsFailed = false;
                     prefs.edit()
                             .putString(KEY_RECS, out.toString())
@@ -584,24 +640,29 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ imagem de fundo
 
-    /** Artes de fundo dos títulos em alta, intercalando filmes e séries. */
-    private List<String> backdropList() {
-        List<String> movies = new ArrayList<>();
-        List<String> shows = new ArrayList<>();
-        List<String> out = new ArrayList<>();
-        String raw = prefs.getString(KEY_RECS, null);
-        if (raw == null) return out;
-        try {
-            JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject r = arr.optJSONObject(i);
-                if (r == null) continue;
-                String b = r.optString("backdrop", "");
-                if (b.isEmpty()) continue;
-                if ("tv".equals(r.optString("type"))) shows.add(b);
-                else movies.add(b);
+    /**
+     * Títulos do fundo: lançamentos (em cartaz / no ar) e, se ainda não chegaram,
+     * os títulos em alta. Intercala filmes e séries.
+     */
+    private List<JSONObject> backdropList() {
+        List<JSONObject> movies = new ArrayList<>();
+        List<JSONObject> shows = new ArrayList<>();
+        List<JSONObject> out = new ArrayList<>();
+        String[] sources = {KEY_BG, KEY_RECS};
+        for (String key : sources) {
+            String raw = prefs.getString(key, null);
+            if (raw == null) continue;
+            try {
+                JSONArray arr = new JSONArray(raw);
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject r = arr.optJSONObject(i);
+                    if (r == null || r.optString("backdrop", "").isEmpty()) continue;
+                    if ("tv".equals(r.optString("type"))) shows.add(r);
+                    else movies.add(r);
+                }
+            } catch (Exception ignored) {
             }
-        } catch (Exception ignored) {
+            if (!movies.isEmpty() || !shows.isEmpty()) break;
         }
         int n = Math.max(movies.size(), shows.size());
         for (int i = 0; i < n; i++) {
@@ -611,25 +672,32 @@ public class MainActivity extends Activity {
         return out;
     }
 
+    private String captionFor(JSONObject r) {
+        String year = r.optString("year", "");
+        return r.optString("label", "Em alta") + " · " + r.optString("title", "")
+                + (year.isEmpty() ? "" : " (" + year + ")");
+    }
+
     /** Passa para a próxima imagem da apresentação de fundo. */
     private void nextBackdrop() {
         if (backdropBusy) return;
-        List<String> list = backdropList();
+        List<JSONObject> list = backdropList();
         if (list.isEmpty()) return;
         if (slideIndex < 0) slideIndex = new Random().nextInt(list.size());
         else slideIndex++;
-        String path = list.get(slideIndex % list.size());
-        if (path.equals(currentBackdrop) && list.size() > 1) {
+        JSONObject pick = list.get(slideIndex % list.size());
+        if (pick.optString("backdrop").equals(currentBackdrop) && list.size() > 1) {
             slideIndex++;
-            path = list.get(slideIndex % list.size());
+            pick = list.get(slideIndex % list.size());
         }
+        String path = pick.optString("backdrop");
         File f = new File(getCacheDir(), "back" + path.replace("/", "_"));
         // Sem internet e sem a imagem guardada: espera um pouco antes de tentar de novo
         if (!f.exists() && System.currentTimeMillis() - backdropTry < RETRY_AFTER) return;
-        loadBackdrop(path);
+        loadBackdrop(path, captionFor(pick));
     }
 
-    private void loadBackdrop(final String path) {
+    private void loadBackdrop(final String path, final String caption) {
         backdropBusy = true;
         new Thread(new Runnable() {
             @Override
@@ -642,7 +710,7 @@ public class MainActivity extends Activity {
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                showBackdrop(bmp, path);
+                                showBackdrop(bmp, path, caption);
                             }
                         });
                     }
@@ -657,9 +725,18 @@ public class MainActivity extends Activity {
     }
 
     /** Mostra a nova imagem com um fade suave por cima da anterior. */
-    private void showBackdrop(final Bitmap bmp, String path) {
+    private void showBackdrop(final Bitmap bmp, String path, final String caption) {
         currentBackdrop = path;
         backdropTry = 0;
+        // O título troca junto com a imagem: some, muda o texto e volta
+        captionView.animate().cancel();
+        captionView.animate().alpha(0f).setDuration(400).withEndAction(new Runnable() {
+            @Override
+            public void run() {
+                captionView.setText(caption);
+                captionView.animate().alpha(1f).setDuration(900).start();
+            }
+        }).start();
         bgImage2.setImageBitmap(bmp);
         bgImage2.setAlpha(0f);
         bgImage2.animate().alpha(1f).setDuration(1500).withEndAction(new Runnable() {
@@ -804,6 +881,7 @@ public class MainActivity extends Activity {
         if (prevTag != null) target = sectionsHost.findViewWithTag(prevTag);
         if (target == null) target = firstTile;
         if (target != null) target.requestFocus();
+        defaultHintView.setVisibility(isDefaultHome() ? View.GONE : View.VISIBLE);
         if (currentBackdrop.isEmpty()) nextBackdrop();
     }
 
@@ -850,6 +928,9 @@ public class MainActivity extends Activity {
         List<Entry> all = new ArrayList<>();
         for (Entry e : apps) {
             if (manageMode || !e.hidden) all.add(e);
+        }
+        if (!isDefaultHome()) {
+            all.add(special(KIND_DEFAULT, "Tornar padrão", android.R.drawable.ic_menu_set_as));
         }
         all.add(special(KIND_SETTINGS, "Configurações", android.R.drawable.ic_menu_preferences));
         all.add(special(KIND_ORGANIZE, manageMode ? "Concluir" : "Organizar",
@@ -1044,6 +1125,63 @@ public class MainActivity extends Activity {
         return s;
     }
 
+    // ------------------------------------------------------------ tela inicial padrão
+
+    private boolean isDefaultHome() {
+        ResolveInfo ri = getPackageManager().resolveActivity(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                PackageManager.MATCH_DEFAULT_ONLY);
+        return ri != null && getPackageName().equals(ri.activityInfo.packageName);
+    }
+
+    /** Pede ao Android para usar a Tela Limpa como tela inicial (quem confirma é você). */
+    private void requestDefaultHome() {
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                RoleManager rm = (RoleManager) getSystemService(Context.ROLE_SERVICE);
+                if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_HOME)
+                        && !rm.isRoleHeld(RoleManager.ROLE_HOME)) {
+                    startActivityForResult(rm.createRequestRoleIntent(RoleManager.ROLE_HOME), 1);
+                    return;
+                }
+            } catch (Exception ignored) {
+                // cai para as opções abaixo
+            }
+        }
+        try {
+            startActivity(new Intent(Settings.ACTION_HOME_SETTINGS));
+            return;
+        } catch (Exception ignored) {
+            // esta TV não tem essa tela
+        }
+        showDefaultHelp();
+    }
+
+    private void showDefaultHelp() {
+        StringBuilder others = new StringBuilder();
+        List<ResolveInfo> homes = getPackageManager().queryIntentActivities(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0);
+        for (ResolveInfo ri : homes) {
+            String p = ri.activityInfo.packageName;
+            if (!p.equals(getPackageName())) others.append("\n• ").append(p);
+        }
+        String msg = "1) Aperte o botão Home do controle e, se a TV perguntar, escolha "
+                + "\"Tela Limpa\" e \"Sempre\".\n\n"
+                + "2) Pelo computador (ADB):\n"
+                + "adb shell cmd package set-home-activity com.rogerio.telalimpa/.MainActivity\n\n"
+                + "Launcher(s) nativo(s) desta TV:"
+                + (others.length() == 0 ? " nenhum encontrado" : others.toString()) + "\n\n"
+                + "Desativar o nativo é opcional. Só faça depois de confirmar que a Tela Limpa "
+                + "funciona como tela inicial:\n"
+                + "adb shell pm disable-user --user 0 NOME_DO_PACOTE\n"
+                + "Para desfazer: adb shell pm enable NOME_DO_PACOTE";
+        new AlertDialog.Builder(this)
+                .setTitle("Tornar a Tela Limpa a tela inicial")
+                .setMessage(msg)
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
     private void roundCorners(View v, final int radiusDp) {
         v.setOutlineProvider(new ViewOutlineProvider() {
             @Override
@@ -1088,6 +1226,9 @@ public class MainActivity extends Activity {
                 } catch (Exception ex) {
                     Toast.makeText(this, "Não foi possível abrir as configurações", Toast.LENGTH_SHORT).show();
                 }
+                break;
+            case KIND_DEFAULT:
+                requestDefaultHome();
                 break;
             case KIND_ORGANIZE:
                 movingPkg = null;

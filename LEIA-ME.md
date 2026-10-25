@@ -47,6 +47,11 @@ adb shell cmd package set-home-activity com.rogerio.telalimpa/.MainActivity
 ```
 Em algumas versões do Android TV a troca do Home só funciona assim.
 
+Dentro do app: o botão **Tornar padrão** (no fim de "Todos os apps") pede ao Android para usar a Tela Limpa
+como tela inicial. Quem confirma é você, porque nenhum app consegue se impor sozinho como tela inicial.
+Desativar o launcher nativo só é possível por ADB (`adb shell pm disable-user --user 0 PACOTE`), é opcional
+e só deve ser feito depois de confirmar que a Tela Limpa funciona como inicial. Para desfazer: `adb shell pm enable PACOTE`.
+
 ## Desfazer
 `adb uninstall com.rogerio.telalimpa`: a TV volta ao launcher original.
 Não desative o launcher original até confirmar que este funciona bem.
