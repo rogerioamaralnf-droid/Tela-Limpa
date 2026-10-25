@@ -34,6 +34,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.HorizontalScrollView;
@@ -79,6 +80,10 @@ public class MainActivity extends Activity {
     private static final String KEY_RECS = "recs_json_v3";
     private static final String KEY_RECS_TIME = "recs_time_v5";
     private static final String KEY_BG = "bg_json_v2";
+    private static final String KEY_CITY = "city_name";
+    private static final String KEY_LAT = "city_lat";
+    private static final String KEY_LON = "city_lon";
+    private static final String KEY_HOME_SEEN = "home_seen";
     private static final String USE_PREFIX = "use_";
 
     private static final long WEATHER_EVERY = 30L * 60 * 1000;
@@ -95,6 +100,7 @@ public class MainActivity extends Activity {
     private static final int KIND_SETTINGS = 1;
     private static final int KIND_ORGANIZE = 2;
     private static final int KIND_DEFAULT = 3;
+    private static final int KIND_CITY = 4;
 
     private static class Entry {
         int kind;
@@ -136,6 +142,9 @@ public class MainActivity extends Activity {
     private List<Entry> apps = new ArrayList<>();
     private boolean manageMode = false;
     private String movingPkg = null;
+    private boolean lastDefault = false;
+    private TextView cityView;
+    private volatile int weatherEpoch = 0;
     private boolean goHome = false;
     private int columns = 6;
     private View firstTile;
@@ -176,6 +185,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        markIfHome(getIntent());
 
         float density = getResources().getDisplayMetrics().density;
         float widthDp = getResources().getDisplayMetrics().widthPixels / density;
@@ -253,6 +263,11 @@ public class MainActivity extends Activity {
         handler.post(tick);
         handler.removeCallbacks(slide);
         handler.post(slide);
+        boolean nowDefault = isDefaultHome();
+        if (nowDefault != lastDefault) {
+            lastDefault = nowDefault;
+            render();
+        }
         if (goHome) {
             goHome = false;
             movingPkg = null;
@@ -279,6 +294,7 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         // Apertar Home de novo volta ao início
+        markIfHome(intent);
         goHome = true;
     }
 
@@ -371,7 +387,8 @@ public class MainActivity extends Activity {
         right.addView(rangeView);
 
         TextView city = new TextView(this);
-        city.setText(Config.CITY);
+        cityView = city;
+        city.setText(cityName());
         city.setTextColor(0xFF9E9E9E);
         city.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
         city.setGravity(Gravity.END);
@@ -516,12 +533,13 @@ public class MainActivity extends Activity {
 
     private void fetchWeather() {
         weatherBusy = true;
+        final int epoch = weatherEpoch;
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    String url = "https://api.open-meteo.com/v1/forecast?latitude=" + Config.LATITUDE
-                            + "&longitude=" + Config.LONGITUDE
+                    String url = "https://api.open-meteo.com/v1/forecast?latitude=" + cityLat()
+                            + "&longitude=" + cityLon()
                             + "&current=temperature_2m,weather_code"
                             + "&daily=temperature_2m_max,temperature_2m_min"
                             + "&timezone=America%2FSao_Paulo&forecast_days=1";
@@ -533,6 +551,7 @@ public class MainActivity extends Activity {
                     out.put("code", cur.getInt("weather_code"));
                     out.put("max", daily.getJSONArray("temperature_2m_max").getDouble(0));
                     out.put("min", daily.getJSONArray("temperature_2m_min").getDouble(0));
+                    if (epoch != weatherEpoch) return; // a cidade mudou durante a consulta
                     prefs.edit()
                             .putString(KEY_WEATHER, out.toString())
                             .putLong(KEY_WEATHER_TIME, System.currentTimeMillis())
@@ -920,7 +939,8 @@ public class MainActivity extends Activity {
         if (prevTag != null) target = sectionsHost.findViewWithTag(prevTag);
         if (target == null) target = firstTile;
         if (target != null) target.requestFocus();
-        defaultHintView.setVisibility(isDefaultHome() ? View.GONE : View.VISIBLE);
+        lastDefault = isDefaultHome();
+        defaultHintView.setVisibility(lastDefault ? View.GONE : View.VISIBLE);
         if (currentBackdrop.isEmpty()) nextBackdrop();
     }
 
@@ -971,6 +991,7 @@ public class MainActivity extends Activity {
         if (!isDefaultHome()) {
             all.add(special(KIND_DEFAULT, "Tornar padrão", android.R.drawable.ic_menu_set_as));
         }
+        all.add(special(KIND_CITY, "Mudar cidade", android.R.drawable.ic_menu_mylocation));
         all.add(special(KIND_SETTINGS, "Configurações", android.R.drawable.ic_menu_preferences));
         all.add(special(KIND_ORGANIZE, manageMode ? "Concluir" : "Organizar",
                 manageMode ? android.R.drawable.ic_menu_save : android.R.drawable.ic_menu_edit));
@@ -1166,11 +1187,145 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ tela inicial padrão
 
+    /** Guarda a hora em que o sistema abriu a Tela Limpa como tela inicial (botão Home ou ao ligar a TV). */
+    private void markIfHome(Intent i) {
+        if (i != null && i.hasCategory(Intent.CATEGORY_HOME)) {
+            prefs.edit().putLong(KEY_HOME_SEEN, System.currentTimeMillis()).apply();
+        }
+    }
+
     private boolean isDefaultHome() {
+        // 1) Android 10+: o sistema informa se este app é o app inicial
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                RoleManager rm = (RoleManager) getSystemService(Context.ROLE_SERVICE);
+                if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_HOME)
+                        && rm.isRoleHeld(RoleManager.ROLE_HOME)) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+                // segue para as outras verificações
+            }
+        }
+        // 2) Qual app responde ao botão Home
         ResolveInfo ri = getPackageManager().resolveActivity(
                 new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
                 PackageManager.MATCH_DEFAULT_ONLY);
-        return ri != null && getPackageName().equals(ri.activityInfo.packageName);
+        if (ri != null && getPackageName().equals(ri.activityInfo.packageName)) return true;
+        // 3) Algumas TVs não informam acima: vale se o sistema abriu a Tela Limpa como inicial há pouco
+        return System.currentTimeMillis() - prefs.getLong(KEY_HOME_SEEN, 0) < 7L * 24 * 60 * 60 * 1000;
+    }
+
+    // ------------------------------------------------------------ cidade do clima
+
+    private String cityName() {
+        return prefs.getString(KEY_CITY, Config.CITY);
+    }
+
+    private String cityLat() {
+        return prefs.getString(KEY_LAT, String.valueOf(Config.LATITUDE));
+    }
+
+    private String cityLon() {
+        return prefs.getString(KEY_LON, String.valueOf(Config.LONGITUDE));
+    }
+
+    private void showCityDialog() {
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("Ex.: Petrópolis");
+        new AlertDialog.Builder(this)
+                .setTitle("Cidade do clima (agora: " + cityName() + ")")
+                .setView(input)
+                .setPositiveButton("Buscar", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        searchCity(input.getText().toString().trim());
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void searchCity(final String query) {
+        if (query.isEmpty()) return;
+        Toast.makeText(this, "Buscando " + query + "...", Toast.LENGTH_SHORT).show();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final List<String> labels = new ArrayList<>();
+                final List<String[]> data = new ArrayList<>();
+                boolean failed = false;
+                try {
+                    String url = "https://geocoding-api.open-meteo.com/v1/search?name=" + Uri.encode(query)
+                            + "&count=6&language=pt&format=json";
+                    JSONArray res = new JSONObject(Net.get(url)).optJSONArray("results");
+                    if (res != null) {
+                        for (int i = 0; i < res.length(); i++) {
+                            JSONObject r = res.getJSONObject(i);
+                            String name = r.optString("name", "");
+                            if (name.isEmpty()) continue;
+                            String admin = r.optString("admin1", "");
+                            String country = r.optString("country", "");
+                            labels.add(name + (admin.isEmpty() ? "" : ", " + admin)
+                                    + (country.isEmpty() ? "" : " · " + country));
+                            data.add(new String[]{name,
+                                    String.valueOf(r.getDouble("latitude")),
+                                    String.valueOf(r.getDouble("longitude"))});
+                        }
+                    }
+                } catch (Exception ex) {
+                    failed = true;
+                }
+                final boolean err = failed;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (err) {
+                            Toast.makeText(MainActivity.this,
+                                    "Não foi possível buscar. Verifique a internet.", Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        if (labels.isEmpty()) {
+                            Toast.makeText(MainActivity.this,
+                                    "Nenhuma cidade encontrada para " + query, Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("Escolha a cidade")
+                                .setItems(labels.toArray(new String[0]),
+                                        new android.content.DialogInterface.OnClickListener() {
+                                            @Override
+                                            public void onClick(android.content.DialogInterface d, int which) {
+                                                String[] c = data.get(which);
+                                                saveCity(c[0], c[1], c[2]);
+                                            }
+                                        })
+                                .setNegativeButton("Cancelar", null)
+                                .show();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void saveCity(String name, String lat, String lon) {
+        weatherEpoch++;
+        prefs.edit()
+                .putString(KEY_CITY, name)
+                .putString(KEY_LAT, lat)
+                .putString(KEY_LON, lon)
+                .remove(KEY_WEATHER)
+                .remove(KEY_WEATHER_TIME)
+                .apply();
+        cityView.setText(name);
+        updateWeatherViews();
+        weatherTry = 0;
+        if (!weatherBusy) {
+            weatherTry = System.currentTimeMillis();
+            fetchWeather();
+        }
+        Toast.makeText(this, "Cidade alterada para " + name, Toast.LENGTH_SHORT).show();
     }
 
     /** Pede ao Android para usar a Tela Limpa como tela inicial (quem confirma é você). */
@@ -1268,6 +1423,9 @@ public class MainActivity extends Activity {
                 break;
             case KIND_DEFAULT:
                 requestDefaultHome();
+                break;
+            case KIND_CITY:
+                showCityDialog();
                 break;
             case KIND_ORGANIZE:
                 movingPkg = null;
