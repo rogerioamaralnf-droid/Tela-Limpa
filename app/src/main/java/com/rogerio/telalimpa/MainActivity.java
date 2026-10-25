@@ -77,8 +77,8 @@ public class MainActivity extends Activity {
     private static final String KEY_WEATHER = "weather_json";
     private static final String KEY_WEATHER_TIME = "weather_time";
     private static final String KEY_RECS = "recs_json_v3";
-    private static final String KEY_RECS_TIME = "recs_time_v4";
-    private static final String KEY_BG = "bg_json_v1";
+    private static final String KEY_RECS_TIME = "recs_time_v5";
+    private static final String KEY_BG = "bg_json_v2";
     private static final String USE_PREFIX = "use_";
 
     private static final long WEATHER_EVERY = 30L * 60 * 1000;
@@ -124,7 +124,10 @@ public class MainActivity extends Activity {
     private LinearLayout sectionsHost;
     private TextView greetingView;
     private TextView dateView;
-    private TextView captionView;
+    private LinearLayout captionBox;
+    private TextView captionLabel;
+    private TextView captionTitle;
+    private TextView captionSub;
     private TextView defaultHintView;
     private TextView tempView;
     private TextView descView;
@@ -188,6 +191,7 @@ public class MainActivity extends Activity {
         // Margens generosas por causa do overscan de algumas TVs
         content.setPadding(dp(48), dp(28), dp(48), dp(32));
         content.addView(buildHeader());
+        content.addView(buildCaption());
 
         sectionsHost = new LinearLayout(this);
         sectionsHost.setOrientation(LinearLayout.VERTICAL);
@@ -332,16 +336,6 @@ public class MainActivity extends Activity {
         timeRow.addView(dateView);
         left.addView(timeRow);
 
-        // Título do filme/série que está no fundo agora
-        captionView = new TextView(this);
-        captionView.setTextColor(0xFFDDDDDD);
-        captionView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        captionView.setSingleLine(true);
-        captionView.setEllipsize(TextUtils.TruncateAt.END);
-        captionView.setAlpha(0f);
-        captionView.setPadding(0, dp(2), 0, 0);
-        left.addView(captionView);
-
         defaultHintView = new TextView(this);
         defaultHintView.setTextColor(0xFFFFC107);
         defaultHintView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
@@ -386,13 +380,47 @@ public class MainActivity extends Activity {
         header.addView(right, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        for (TextView tv : new TextView[]{greetingView, clock, dateView, captionView, tempView, descView, rangeView, city}) {
+        for (TextView tv : new TextView[]{greetingView, clock, dateView, tempView, descView, rangeView, city}) {
             tv.setShadowLayer(6f, 0f, 2f, 0xAA000000);
         }
 
         updateHeader();
         updateWeatherViews();
         return header;
+    }
+
+    /** Destaque com o título do filme/série que está no fundo agora. */
+    private View buildCaption() {
+        captionBox = new LinearLayout(this);
+        captionBox.setOrientation(LinearLayout.VERTICAL);
+        captionBox.setPadding(0, dp(18), dp(120), 0);
+        captionBox.setAlpha(0f);
+        captionBox.setVisibility(View.GONE);
+
+        captionLabel = new TextView(this);
+        captionLabel.setTextColor(0xFFFFC107);
+        captionLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        captionLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        captionBox.addView(captionLabel);
+
+        captionTitle = new TextView(this);
+        captionTitle.setTextColor(Color.WHITE);
+        captionTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 32);
+        captionTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        captionTitle.setMaxLines(2);
+        captionTitle.setEllipsize(TextUtils.TruncateAt.END);
+        captionBox.addView(captionTitle);
+
+        captionSub = new TextView(this);
+        captionSub.setTextColor(0xFFE0E0E0);
+        captionSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        captionSub.setPadding(0, dp(2), 0, 0);
+        captionBox.addView(captionSub);
+
+        for (TextView tv : new TextView[]{captionLabel, captionTitle, captionSub}) {
+            tv.setShadowLayer(8f, 0f, 2f, 0xCC000000);
+        }
+        return captionBox;
     }
 
     private void updateHeader() {
@@ -577,6 +605,7 @@ public class MainActivity extends Activity {
                                 o.put("label", s[2]);
                                 o.put("title", r.has("title") ? r.optString("title") : r.optString("name"));
                                 o.put("backdrop", back);
+                                o.put("rating", r.optDouble("vote_average", 0));
                                 String d = r.optString("release_date", r.optString("first_air_date", ""));
                                 o.put("year", d.length() >= 4 ? d.substring(0, 4) : "");
                                 bg.put(o);
@@ -672,10 +701,19 @@ public class MainActivity extends Activity {
         return out;
     }
 
-    private String captionFor(JSONObject r) {
+    private void applyCaption(JSONObject r) {
+        captionLabel.setText(r.optString("label", "Em alta").toUpperCase(new Locale("pt", "BR")));
+        captionTitle.setText(r.optString("title", ""));
         String year = r.optString("year", "");
-        return r.optString("label", "Em alta") + " · " + r.optString("title", "")
-                + (year.isEmpty() ? "" : " (" + year + ")");
+        double rating = r.optDouble("rating", 0);
+        StringBuilder sb = new StringBuilder();
+        if (!year.isEmpty()) sb.append(year);
+        if (rating > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(String.format(Locale.US, "★ %.1f", rating));
+        }
+        captionSub.setText(sb.toString());
+        captionSub.setVisibility(sb.length() == 0 ? View.GONE : View.VISIBLE);
     }
 
     /** Passa para a próxima imagem da apresentação de fundo. */
@@ -694,10 +732,10 @@ public class MainActivity extends Activity {
         File f = new File(getCacheDir(), "back" + path.replace("/", "_"));
         // Sem internet e sem a imagem guardada: espera um pouco antes de tentar de novo
         if (!f.exists() && System.currentTimeMillis() - backdropTry < RETRY_AFTER) return;
-        loadBackdrop(path, captionFor(pick));
+        loadBackdrop(path, pick);
     }
 
-    private void loadBackdrop(final String path, final String caption) {
+    private void loadBackdrop(final String path, final JSONObject info) {
         backdropBusy = true;
         new Thread(new Runnable() {
             @Override
@@ -710,7 +748,7 @@ public class MainActivity extends Activity {
                         runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                showBackdrop(bmp, path, caption);
+                                showBackdrop(bmp, path, info);
                             }
                         });
                     }
@@ -725,16 +763,17 @@ public class MainActivity extends Activity {
     }
 
     /** Mostra a nova imagem com um fade suave por cima da anterior. */
-    private void showBackdrop(final Bitmap bmp, String path, final String caption) {
+    private void showBackdrop(final Bitmap bmp, String path, final JSONObject info) {
         currentBackdrop = path;
         backdropTry = 0;
         // O título troca junto com a imagem: some, muda o texto e volta
-        captionView.animate().cancel();
-        captionView.animate().alpha(0f).setDuration(400).withEndAction(new Runnable() {
+        captionBox.animate().cancel();
+        captionBox.animate().alpha(0f).setDuration(400).withEndAction(new Runnable() {
             @Override
             public void run() {
-                captionView.setText(caption);
-                captionView.animate().alpha(1f).setDuration(900).start();
+                applyCaption(info);
+                captionBox.setVisibility(View.VISIBLE);
+                captionBox.animate().alpha(1f).setDuration(900).start();
             }
         }).start();
         bgImage2.setImageBitmap(bmp);
