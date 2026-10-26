@@ -85,6 +85,7 @@ public class MainActivity extends Activity {
     private static final String KEY_LON = "city_lon";
     private static final String KEY_HOME_SEEN = "home_seen";
     private static final String KEY_CH_LIST = "channel_list";
+    private static final String KEY_BG_MODE = "bg_mode";
     private static final String KEY_CH_INFO = "channel_info_v1";
     private static final String CH_USE_PREFIX = "chuse_";
     private static final String USE_PREFIX = "use_";
@@ -105,6 +106,7 @@ public class MainActivity extends Activity {
     private static final int KIND_DEFAULT = 3;
     private static final int KIND_CITY = 4;
     private static final int KIND_CHANNELS = 5;
+    private static final int KIND_BACKGROUND = 6;
 
     private static class Entry {
         int kind;
@@ -449,7 +451,7 @@ public class MainActivity extends Activity {
     private void updateHeader() {
         greetingView.setText(greeting());
         dateView.setText(dateString());
-        if (root != null) root.setBackground(timeGradient());
+        if (root != null) root.setBackground(backgroundDrawable());
     }
 
     /** Degradê de fundo conforme o período do dia (aparece quando não há imagem). */
@@ -748,7 +750,7 @@ public class MainActivity extends Activity {
 
     /** Passa para a próxima imagem da apresentação de fundo. */
     private void nextBackdrop() {
-        if (backdropBusy) return;
+        if (backdropBusy || !bgMode().equals("movies")) return;
         List<JSONObject> list = backdropList();
         if (list.isEmpty()) return;
         if (slideIndex < 0) slideIndex = new Random().nextInt(list.size());
@@ -794,6 +796,7 @@ public class MainActivity extends Activity {
 
     /** Mostra a nova imagem com um fade suave por cima da anterior. */
     private void showBackdrop(final Bitmap bmp, String path, final JSONObject info) {
+        if (!bgMode().equals("movies")) return;
         currentBackdrop = path;
         backdropTry = 0;
         // O título troca junto com a imagem: some, muda o texto e volta
@@ -1006,6 +1009,7 @@ public class MainActivity extends Activity {
             all.add(special(KIND_DEFAULT, "Tornar padrão", android.R.drawable.ic_menu_set_as));
         }
         all.add(special(KIND_CITY, "Mudar cidade", android.R.drawable.ic_menu_mylocation));
+        all.add(special(KIND_BACKGROUND, "Mudar fundo", android.R.drawable.ic_menu_gallery));
         all.add(special(KIND_SETTINGS, "Configurações", android.R.drawable.ic_menu_preferences));
         all.add(special(KIND_ORGANIZE, manageMode ? "Concluir" : "Organizar",
                 manageMode ? android.R.drawable.ic_menu_save : android.R.drawable.ic_menu_edit));
@@ -1228,6 +1232,75 @@ public class MainActivity extends Activity {
         if (ri != null && getPackageName().equals(ri.activityInfo.packageName)) return true;
         // 3) Algumas TVs não informam acima: vale se o sistema abriu a Tela Limpa como inicial há pouco
         return System.currentTimeMillis() - prefs.getLong(KEY_HOME_SEEN, 0) < 7L * 24 * 60 * 60 * 1000;
+    }
+
+    // ------------------------------------------------------------ fundo da tela
+
+    private static final String[][] BG_THEMES = {
+            {"movies", "Filmes e séries em alta (padrão)"},
+            {"dia", "Degradê do dia"},
+            {"azul", "Azul noite"},
+            {"roxo", "Roxo"},
+            {"verde", "Verde floresta"},
+            {"sol", "Pôr do sol"},
+            {"grafite", "Grafite"}
+    };
+
+    private String bgMode() {
+        return prefs.getString(KEY_BG_MODE, "movies");
+    }
+
+    private Drawable backgroundDrawable() {
+        int[] c;
+        switch (bgMode()) {
+            case "azul": c = new int[]{0xFF0B1F44, 0xFF1D5FA8}; break;
+            case "roxo": c = new int[]{0xFF2B1055, 0xFF7F4FC9}; break;
+            case "verde": c = new int[]{0xFF0B3B2E, 0xFF2E8B63}; break;
+            case "sol": c = new int[]{0xFF5B2A86, 0xFFF2784B}; break;
+            case "grafite": c = new int[]{0xFF15171C, 0xFF3A3F4B}; break;
+            default: return timeGradient();
+        }
+        return new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, c);
+    }
+
+    private void showBackgroundDialog() {
+        String[] names = new String[BG_THEMES.length];
+        int checked = 0;
+        for (int i = 0; i < BG_THEMES.length; i++) {
+            names[i] = BG_THEMES[i][1];
+            if (BG_THEMES[i][0].equals(bgMode())) checked = i;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Fundo da tela")
+                .setSingleChoiceItems(names, checked, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        prefs.edit().putString(KEY_BG_MODE, BG_THEMES[which][0]).apply();
+                        d.dismiss();
+                        applyBackgroundMode();
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void applyBackgroundMode() {
+        root.setBackground(backgroundDrawable());
+        bgImage.animate().cancel();
+        bgImage2.animate().cancel();
+        captionBox.animate().cancel();
+        if (bgMode().equals("movies")) {
+            currentBackdrop = "";
+            slideIndex = -1;
+            nextBackdrop();
+        } else {
+            bgImage.setImageDrawable(null);
+            bgImage2.setImageDrawable(null);
+            bgImage.setAlpha(0f);
+            bgImage2.setAlpha(0f);
+            captionBox.setAlpha(0f);
+            captionBox.setVisibility(View.GONE);
+        }
     }
 
     // ------------------------------------------------------------ meus canais do YouTube
@@ -1784,6 +1857,9 @@ public class MainActivity extends Activity {
                 break;
             case KIND_CHANNELS:
                 showChannelsDialog();
+                break;
+            case KIND_BACKGROUND:
+                showBackgroundDialog();
                 break;
             case KIND_ORGANIZE:
                 movingPkg = null;

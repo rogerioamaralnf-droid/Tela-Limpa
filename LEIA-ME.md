@@ -3,7 +3,7 @@
 Tela inicial limpa, leve e sem anúncios, feita para a TV Aiwa do Rogério.
 
 ## O que aparece na tela
-- **Saudação** ("Bom dia, Rogério"), **relógio** e **data**.
+- **Saudação** ("Bom dia, Rogerio"), **relógio** e **data**.
 - **Clima de Nova Friburgo** (temperatura, condição, máxima e mínima), atualizado a cada 30 minutos.
 - **Favoritos** (até uma linha cheia) e **Mais usados** (contados pelo próprio launcher).
 - **Indicações da semana**: filmes e séries em alta (TMDB). Clique num pôster para ver a sinopse e buscar o trailer.

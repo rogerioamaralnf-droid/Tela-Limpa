@@ -6,7 +6,7 @@ package com.rogerio.telalimpa;
 final class Config {
 
     /** Nome usado na saudação: "Bom dia, Rogério". */
-    static final String USER_NAME = "Rogério";
+    static final String USER_NAME = "Rogerio";
 
     /** Cidade do clima (Open-Meteo, sem chave). */
     static final String CITY = "Nova Friburgo";
