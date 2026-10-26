@@ -3,6 +3,8 @@
 
     <!-- Só para o clima e as indicações de filmes e séries -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Para o botão Desinstalar do modo Organizar -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
     <uses-feature
         android:name="android.hardware.touchscreen"

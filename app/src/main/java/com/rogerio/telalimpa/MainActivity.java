@@ -1936,7 +1936,8 @@ public class MainActivity extends Activity {
         final String[] items = {
                 "Mover (mudar de posição)",
                 e.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos",
-                e.hidden ? "Mostrar na tela" : "Ocultar da tela"
+                e.hidden ? "Mostrar na tela" : "Ocultar da tela",
+                "Desinstalar"
         };
         new AlertDialog.Builder(this)
                 .setTitle(e.label)
@@ -1948,11 +1949,49 @@ public class MainActivity extends Activity {
                             render();
                         } else if (which == 1) {
                             toggleFavorite(e);
-                        } else {
+                        } else if (which == 2) {
                             toggleHidden(e);
+                        } else {
+                            confirmUninstall(e);
                         }
                     }
                 })
+                .show();
+    }
+
+    /** Pede confirmação e abre a tela de desinstalação do Android (quem confirma é você). */
+    private void confirmUninstall(final Entry e) {
+        if (e.pkg == null || e.pkg.equals(getPackageName())) {
+            Toast.makeText(this, "Este app não pode ser desinstalado por aqui", Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            android.content.pm.ApplicationInfo ai = getPackageManager().getApplicationInfo(e.pkg, 0);
+            boolean system = (ai.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+                    && (ai.flags & android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0;
+            if (system) {
+                Toast.makeText(this, e.label + " é um app do sistema e não pode ser desinstalado. Use Ocultar.",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+        } catch (Exception ignored) {
+            // segue para a confirmação
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Desinstalar " + e.label + "?")
+                .setMessage("O app e os dados dele serão removidos da TV.")
+                .setPositiveButton("Desinstalar", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        try {
+                            startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + e.pkg)));
+                        } catch (Exception ex) {
+                            Toast.makeText(MainActivity.this, "Não foi possível abrir a desinstalação",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
                 .show();
     }
 
