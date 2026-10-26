@@ -935,7 +935,7 @@ public class MainActivity extends Activity {
                 sectionsHost.addView(tileRow(top, "top", false));
             }
 
-            addSection("Meus canais");
+            addSection("Canais do YouTube");
             sectionsHost.addView(scrollRow(channelsRow()));
 
             if (Config.TMDB_API_KEY.isEmpty()) {
@@ -1357,7 +1357,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 dp(TILE_W + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = dp(8);
-        row.addView(appTile(special(KIND_CHANNELS, "Trocar canais",
+        row.addView(appTile(special(KIND_CHANNELS, "Editar canais",
                 android.R.drawable.ic_menu_edit), "ch", false), lp);
         return row;
     }
@@ -1411,6 +1411,14 @@ public class MainActivity extends Activity {
         card.addView(letter, new FrameLayout.LayoutParams(av, av, Gravity.CENTER));
 
         if (!id.isEmpty() && !thumb.isEmpty()) loadChannelThumb(thumb, id, avatar, letter);
+
+        // Selo do YouTube no canto do cartão
+        ImageView yt = new ImageView(this);
+        yt.setImageResource(R.drawable.ic_youtube);
+        FrameLayout.LayoutParams ylp = new FrameLayout.LayoutParams(dp(26), dp(18), Gravity.TOP | Gravity.END);
+        ylp.topMargin = dp(6);
+        ylp.rightMargin = dp(6);
+        card.addView(yt, ylp);
 
         TextView label = new TextView(this);
         label.setText(title);
@@ -1560,14 +1568,15 @@ public class MainActivity extends Activity {
     }
 
     private void showChannelsDialog() {
-        final String[] items = {"Adicionar canal", "Remover canal", "Restaurar lista inicial"};
+        final String[] items = {"Adicionar canal", "Editar (trocar) um canal", "Remover canal", "Restaurar lista inicial"};
         new AlertDialog.Builder(this)
-                .setTitle("Meus canais")
+                .setTitle("Canais do YouTube")
                 .setItems(items, new android.content.DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(android.content.DialogInterface d, int which) {
                         if (which == 0) askNewChannel();
-                        else if (which == 1) askRemoveChannel();
+                        else if (which == 1) askEditChannel();
+                        else if (which == 2) askRemoveChannel();
                         else restoreChannels();
                     }
                 })
@@ -1606,6 +1615,57 @@ public class MainActivity extends Activity {
         fetchChannels();
         render();
         Toast.makeText(this, "Canal adicionado", Toast.LENGTH_SHORT).show();
+    }
+
+    /** Escolhe um canal da lista e troca por outro (@ ou nome), mantendo a posição. */
+    private void askEditChannel() {
+        final List<String> list = channelList();
+        if (list.isEmpty()) {
+            Toast.makeText(this, "A lista de canais está vazia", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        JSONObject all = channelInfoAll();
+        String[] names = new String[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            JSONObject info = all.optJSONObject(list.get(i));
+            String t = info != null ? info.optString("title", "") : "";
+            names[i] = t.isEmpty() ? list.get(i) : t + " (" + list.get(i) + ")";
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Editar qual canal?")
+                .setItems(names, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        askReplaceChannel(list, which);
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void askReplaceChannel(final List<String> list, final int index) {
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setText(list.get(index));
+        input.setSelectAllOnFocus(true);
+        new AlertDialog.Builder(this)
+                .setTitle("Novo @ ou nome do canal")
+                .setView(input)
+                .setPositiveButton("Salvar", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        String q = input.getText().toString().trim();
+                        if (q.isEmpty()) return;
+                        list.set(index, q);
+                        saveChannelList(list);
+                        chTry = 0;
+                        fetchChannels();
+                        render();
+                        Toast.makeText(MainActivity.this, "Canal atualizado", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
     }
 
     private void askRemoveChannel() {
