@@ -84,6 +84,9 @@ public class MainActivity extends Activity {
     private static final String KEY_LAT = "city_lat";
     private static final String KEY_LON = "city_lon";
     private static final String KEY_HOME_SEEN = "home_seen";
+    private static final String KEY_CH_LIST = "channel_list";
+    private static final String KEY_CH_INFO = "channel_info_v1";
+    private static final String CH_USE_PREFIX = "chuse_";
     private static final String USE_PREFIX = "use_";
 
     private static final long WEATHER_EVERY = 30L * 60 * 1000;
@@ -101,6 +104,7 @@ public class MainActivity extends Activity {
     private static final int KIND_ORGANIZE = 2;
     private static final int KIND_DEFAULT = 3;
     private static final int KIND_CITY = 4;
+    private static final int KIND_CHANNELS = 5;
 
     private static class Entry {
         int kind;
@@ -145,6 +149,8 @@ public class MainActivity extends Activity {
     private boolean lastDefault = false;
     private TextView cityView;
     private volatile int weatherEpoch = 0;
+    private volatile boolean chBusy = false;
+    private long chTry = 0;
     private boolean goHome = false;
     private int columns = 6;
     private View firstTile;
@@ -528,6 +534,11 @@ public class MainActivity extends Activity {
                 && now - prefs.getLong(KEY_RECS_TIME, 0) > RECS_EVERY) {
             recsTry = now;
             fetchRecs();
+        }
+        if (!Config.YOUTUBE_API_KEY.isEmpty() && !chBusy && now - chTry > RETRY_AFTER
+                && needsChannelInfo()) {
+            chTry = now;
+            fetchChannels();
         }
     }
 
@@ -921,6 +932,9 @@ public class MainActivity extends Activity {
                 sectionsHost.addView(tileRow(top, "top", false));
             }
 
+            addSection("Meus canais");
+            sectionsHost.addView(scrollRow(channelsRow()));
+
             if (Config.TMDB_API_KEY.isEmpty()) {
                 addSection("Filmes e séries");
                 sectionsHost.addView(recsRow("movie"));
@@ -1216,6 +1230,347 @@ public class MainActivity extends Activity {
         return System.currentTimeMillis() - prefs.getLong(KEY_HOME_SEEN, 0) < 7L * 24 * 60 * 60 * 1000;
     }
 
+    // ------------------------------------------------------------ meus canais do YouTube
+
+    private List<String> channelList() {
+        String raw = prefs.getString(KEY_CH_LIST, null);
+        List<String> out = new ArrayList<>();
+        if (raw == null) {
+            out.addAll(Arrays.asList(Config.DEFAULT_CHANNELS));
+        } else {
+            for (String s : raw.split("\n")) {
+                if (!s.trim().isEmpty()) out.add(s.trim());
+            }
+        }
+        return out;
+    }
+
+    private void saveChannelList(List<String> list) {
+        prefs.edit().putString(KEY_CH_LIST, TextUtils.join("\n", list)).apply();
+    }
+
+    private JSONObject channelInfoAll() {
+        try {
+            String raw = prefs.getString(KEY_CH_INFO, null);
+            if (raw != null) return new JSONObject(raw);
+        } catch (Exception ignored) {
+        }
+        return new JSONObject();
+    }
+
+    private boolean needsChannelInfo() {
+        JSONObject all = channelInfoAll();
+        for (String q : channelList()) {
+            if (!all.has(q)) return true;
+        }
+        return false;
+    }
+
+    /** Linha de canais: os mais abertos pela Tela Limpa vêm primeiro; no fim, o botão Trocar canais. */
+    private LinearLayout channelsRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setClipChildren(false);
+        JSONObject all = channelInfoAll();
+        List<String> ordered = channelList();
+        Collections.sort(ordered, (a, b) ->
+                prefs.getInt(CH_USE_PREFIX + b, 0) - prefs.getInt(CH_USE_PREFIX + a, 0));
+        for (String q : ordered) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    dp(TILE_W + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = dp(8);
+            row.addView(channelTile(q, all.optJSONObject(q)), lp);
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                dp(TILE_W + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(8);
+        row.addView(appTile(special(KIND_CHANNELS, "Trocar canais",
+                android.R.drawable.ic_menu_edit), "ch", false), lp);
+        return row;
+    }
+
+    private View channelTile(final String q, JSONObject info) {
+        String title = info != null ? info.optString("title", "") : "";
+        if (title.isEmpty()) title = q.startsWith("@") ? q.substring(1) : q;
+        final String id = info != null ? info.optString("id", "") : "";
+        String thumb = info != null ? info.optString("thumb", "") : "";
+
+        LinearLayout item = new LinearLayout(this);
+        item.setOrientation(LinearLayout.VERTICAL);
+        item.setGravity(Gravity.CENTER_HORIZONTAL);
+        item.setPadding(dp(4), dp(4), dp(4), dp(6));
+        item.setFocusable(true);
+        item.setClickable(true);
+        item.setBackground(focusBackground());
+        item.setTag("ch:" + q);
+        addFocusZoom(item);
+
+        FrameLayout card = new FrameLayout(this);
+        card.setBackground(cardBackground());
+        roundCorners(card, 12);
+
+        int av = dp(TILE_H * 62 / 100);
+        int[] palette = {0xFFE53935, 0xFF8E24AA, 0xFF3949AB, 0xFF00897B, 0xFFF4511E, 0xFF6D4C41};
+        GradientDrawable oval = new GradientDrawable();
+        oval.setShape(GradientDrawable.OVAL);
+        oval.setColor(palette[(q.hashCode() & 0x7fffffff) % palette.length]);
+
+        ImageView avatar = new ImageView(this);
+        avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        avatar.setBackground(oval);
+        avatar.setOutlineProvider(new ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, Outline outline) {
+                outline.setOval(0, 0, view.getWidth(), view.getHeight());
+            }
+        });
+        avatar.setClipToOutline(true);
+        card.addView(avatar, new FrameLayout.LayoutParams(av, av, Gravity.CENTER));
+
+        // Letra inicial enquanto a foto não chega (ou se não houver chave do YouTube)
+        TextView letter = new TextView(this);
+        String base = q.startsWith("@") ? q.substring(1) : q;
+        letter.setText(base.isEmpty() ? "?" : base.substring(0, 1).toUpperCase());
+        letter.setTextColor(Color.WHITE);
+        letter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        letter.setTypeface(Typeface.DEFAULT_BOLD);
+        letter.setGravity(Gravity.CENTER);
+        card.addView(letter, new FrameLayout.LayoutParams(av, av, Gravity.CENTER));
+
+        if (!id.isEmpty() && !thumb.isEmpty()) loadChannelThumb(thumb, id, avatar, letter);
+
+        TextView label = new TextView(this);
+        label.setText(title);
+        label.setTextColor(Color.WHITE);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        label.setShadowLayer(4f, 0f, 1f, 0xAA000000);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        label.setGravity(Gravity.CENTER);
+        label.setPadding(0, dp(6), 0, 0);
+
+        item.addView(card, new LinearLayout.LayoutParams(dp(TILE_W), dp(TILE_H)));
+        item.addView(label, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        item.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openChannel(q, id);
+            }
+        });
+        if (firstTile == null) firstTile = item;
+        return item;
+    }
+
+    private void loadChannelThumb(final String url, final String id,
+                                  final ImageView target, final TextView letter) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    File f = new File(getCacheDir(), "chan_" + id + ".jpg");
+                    if (!f.exists()) Net.download(url, f);
+                    final Bitmap bmp = BitmapFactory.decodeFile(f.getAbsolutePath());
+                    if (bmp != null) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                target.setImageBitmap(bmp);
+                                letter.setVisibility(View.GONE);
+                            }
+                        });
+                    }
+                } catch (Exception ignored) {
+                    // sem internet: fica a letra inicial
+                }
+            }
+        }).start();
+    }
+
+    /** Abre o canal no app do YouTube da TV (ou o que houver). */
+    private void openChannel(String q, String id) {
+        prefs.edit().putInt(CH_USE_PREFIX + q, prefs.getInt(CH_USE_PREFIX + q, 0) + 1).apply();
+        String url;
+        if (!id.isEmpty()) {
+            url = "https://www.youtube.com/channel/" + id;
+        } else if (q.startsWith("@")) {
+            url = "https://www.youtube.com/" + Uri.encode(q, "@");
+        } else {
+            url = "https://www.youtube.com/results?search_query=" + Uri.encode(q);
+        }
+        Intent base = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        String[] pkgs = {"com.google.android.youtube.tv", "com.google.android.youtube"};
+        for (String p : pkgs) {
+            try {
+                startActivity(new Intent(base).setPackage(p));
+                return;
+            } catch (Exception ignored) {
+                // tenta o próximo
+            }
+        }
+        try {
+            startActivity(base);
+        } catch (Exception ex) {
+            Toast.makeText(this, "Não foi possível abrir o YouTube", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Descobre id, nome e foto dos canais que ainda não foram consultados (precisa da chave do YouTube). */
+    private void fetchChannels() {
+        if (Config.YOUTUBE_API_KEY.isEmpty() || chBusy) return;
+        chBusy = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    JSONObject all = channelInfoAll();
+                    boolean changed = false;
+                    for (String q : channelList()) {
+                        if (all.has(q)) continue;
+                        try {
+                            all.put(q, resolveChannel(q));
+                            changed = true;
+                        } catch (Exception ignored) {
+                            // tenta de novo mais tarde
+                        }
+                    }
+                    if (changed) {
+                        prefs.edit().putString(KEY_CH_INFO, all.toString()).apply();
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                render();
+                            }
+                        });
+                    }
+                } finally {
+                    chBusy = false;
+                }
+            }
+        }).start();
+    }
+
+    private JSONObject resolveChannel(String q) throws Exception {
+        String key = Config.YOUTUBE_API_KEY;
+        String url;
+        if (q.startsWith("@")) {
+            url = "https://www.googleapis.com/youtube/v3/channels?part=snippet&forHandle="
+                    + Uri.encode(q) + "&key=" + key;
+        } else {
+            url = "https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q="
+                    + Uri.encode(q) + "&key=" + key;
+        }
+        JSONArray items = new JSONObject(Net.get(url)).optJSONArray("items");
+        JSONObject out = new JSONObject();
+        if (items == null || items.length() == 0) {
+            // canal não encontrado: guarda vazio para não consultar de novo
+            out.put("id", "");
+            out.put("title", "");
+            out.put("thumb", "");
+            return out;
+        }
+        JSONObject it = items.getJSONObject(0);
+        JSONObject sn = it.getJSONObject("snippet");
+        String id = q.startsWith("@") ? it.getString("id") : sn.getString("channelId");
+        String thumb = "";
+        JSONObject th = sn.optJSONObject("thumbnails");
+        if (th != null) {
+            JSONObject m = th.optJSONObject("medium");
+            if (m == null) m = th.optJSONObject("default");
+            if (m != null) thumb = m.optString("url", "");
+        }
+        out.put("id", id);
+        out.put("title", sn.optString("title", q));
+        out.put("thumb", thumb);
+        return out;
+    }
+
+    private void showChannelsDialog() {
+        final String[] items = {"Adicionar canal", "Remover canal", "Restaurar lista inicial"};
+        new AlertDialog.Builder(this)
+                .setTitle("Meus canais")
+                .setItems(items, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        if (which == 0) askNewChannel();
+                        else if (which == 1) askRemoveChannel();
+                        else restoreChannels();
+                    }
+                })
+                .show();
+    }
+
+    private void askNewChannel() {
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setHint("@nomedocanal (ou o nome do canal)");
+        new AlertDialog.Builder(this)
+                .setTitle("Adicionar canal")
+                .setView(input)
+                .setPositiveButton("Adicionar", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        addChannel(input.getText().toString().trim());
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void addChannel(String q) {
+        if (q.isEmpty()) return;
+        List<String> list = channelList();
+        for (String s : list) {
+            if (s.equalsIgnoreCase(q)) {
+                Toast.makeText(this, "Esse canal já está na lista", Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
+        list.add(q);
+        saveChannelList(list);
+        chTry = 0;
+        fetchChannels();
+        render();
+        Toast.makeText(this, "Canal adicionado", Toast.LENGTH_SHORT).show();
+    }
+
+    private void askRemoveChannel() {
+        final List<String> list = channelList();
+        if (list.isEmpty()) {
+            Toast.makeText(this, "A lista de canais está vazia", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        JSONObject all = channelInfoAll();
+        String[] names = new String[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            JSONObject info = all.optJSONObject(list.get(i));
+            String t = info != null ? info.optString("title", "") : "";
+            names[i] = t.isEmpty() ? list.get(i) : t + " (" + list.get(i) + ")";
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Remover qual canal?")
+                .setItems(names, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        list.remove(which);
+                        saveChannelList(list);
+                        render();
+                        Toast.makeText(MainActivity.this, "Canal removido", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void restoreChannels() {
+        prefs.edit().remove(KEY_CH_LIST).apply();
+        chTry = 0;
+        fetchChannels();
+        render();
+        Toast.makeText(this, "Lista inicial restaurada", Toast.LENGTH_SHORT).show();
+    }
+
     // ------------------------------------------------------------ cidade do clima
 
     private String cityName() {
@@ -1426,6 +1781,9 @@ public class MainActivity extends Activity {
                 break;
             case KIND_CITY:
                 showCityDialog();
+                break;
+            case KIND_CHANNELS:
+                showChannelsDialog();
                 break;
             case KIND_ORGANIZE:
                 movingPkg = null;

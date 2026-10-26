@@ -19,6 +19,14 @@ final class Config {
      */
     static final String TMDB_API_KEY = "c6eed519fada8ef8b09a55e7438cd8e1";
 
+    /** Chave gratuita da YouTube Data API v3 (Google Cloud): foto e nome dos canais. Vazio = só o nome. */
+    static final String YOUTUBE_API_KEY = "";
+
+    /** Canais iniciais da linha "Meus canais". Depois dá para trocar pelo botão "Trocar canais". */
+    static final String[] DEFAULT_CHANNELS = {
+            "@canaldomanel", "@Teatualizei", "@Nomaderaíz", "@Pânicoretrô", "@Abba"
+    };
+
     /** A cada quantos segundos a imagem de fundo troca (filmes e séries em alta). */
     static final int BACKGROUND_SECONDS = 20;
 
