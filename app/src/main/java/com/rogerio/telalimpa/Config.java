@@ -24,7 +24,7 @@ final class Config {
 
     /** Canais iniciais da linha "Meus canais". Depois dá para trocar pelo botão "Trocar canais". */
     static final String[] DEFAULT_CHANNELS = {
-            "@canaldomanel", "@Teatualizei", "@Nomaderaíz", "@Pânicoretrô", "@Abba"
+            "@canaldomanelmuitofutebol", "@Teatualizei", "@Nomaderaíz", "@Pânicoretrô", "@Abba"
     };
 
     /** A cada quantos segundos a imagem de fundo troca (filmes e séries em alta). */

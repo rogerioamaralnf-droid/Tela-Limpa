@@ -1348,17 +1348,18 @@ public class MainActivity extends Activity {
         List<String> ordered = channelList();
         Collections.sort(ordered, (a, b) ->
                 prefs.getInt(CH_USE_PREFIX + b, 0) - prefs.getInt(CH_USE_PREFIX + a, 0));
+        LinearLayout.LayoutParams lpE = new LinearLayout.LayoutParams(
+                dp(TILE_W + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpE.rightMargin = dp(8);
+        row.addView(appTile(special(KIND_CHANNELS, "Adicionar / trocar canal",
+                android.R.drawable.ic_menu_edit), "ch", false), lpE);
         for (String q : ordered) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     dp(TILE_W + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.rightMargin = dp(8);
             row.addView(channelTile(q, all.optJSONObject(q)), lp);
         }
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                dp(TILE_W + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.rightMargin = dp(8);
-        row.addView(appTile(special(KIND_CHANNELS, "Editar canais",
-                android.R.drawable.ic_menu_edit), "ch", false), lp);
+
         return row;
     }
 
@@ -1390,7 +1391,6 @@ public class MainActivity extends Activity {
 
         ImageView avatar = new ImageView(this);
         avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        avatar.setBackground(oval);
         avatar.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, Outline outline) {
@@ -1400,20 +1400,16 @@ public class MainActivity extends Activity {
         avatar.setClipToOutline(true);
         card.addView(avatar, new FrameLayout.LayoutParams(av, av, Gravity.CENTER));
 
-        // Letra inicial enquanto a foto não chega (ou se não houver chave do YouTube)
-        TextView letter = new TextView(this);
-        String base = q.startsWith("@") ? q.substring(1) : q;
-        letter.setText(base.isEmpty() ? "?" : base.substring(0, 1).toUpperCase());
-        letter.setTextColor(Color.WHITE);
-        letter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
-        letter.setTypeface(Typeface.DEFAULT_BOLD);
-        letter.setGravity(Gravity.CENTER);
-        card.addView(letter, new FrameLayout.LayoutParams(av, av, Gravity.CENTER));
+        // Logo do YouTube no centro enquanto não há foto do canal
+        ImageView letter = new ImageView(this);
+        letter.setImageResource(R.drawable.ic_youtube);
+        card.addView(letter, new FrameLayout.LayoutParams(dp(52), dp(36), Gravity.CENTER));
 
         if (!id.isEmpty() && !thumb.isEmpty()) loadChannelThumb(thumb, id, avatar, letter);
 
-        // Selo do YouTube no canto do cartão
+        // Selo do YouTube no canto do cartão (quando já há foto)
         ImageView yt = new ImageView(this);
+        yt.setVisibility(!id.isEmpty() && !thumb.isEmpty() ? View.VISIBLE : View.GONE);
         yt.setImageResource(R.drawable.ic_youtube);
         FrameLayout.LayoutParams ylp = new FrameLayout.LayoutParams(dp(26), dp(18), Gravity.TOP | Gravity.END);
         ylp.topMargin = dp(6);
@@ -1444,7 +1440,7 @@ public class MainActivity extends Activity {
     }
 
     private void loadChannelThumb(final String url, final String id,
-                                  final ImageView target, final TextView letter) {
+                                  final ImageView target, final View letter) {
         new Thread(new Runnable() {
             @Override
             public void run() {
