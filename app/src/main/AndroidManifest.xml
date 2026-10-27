@@ -3,6 +3,9 @@
 
     <!-- Só para o clima e as indicações de filmes e séries -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Mostra o sinal de Wi-Fi na tela inicial -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Para o botão Desinstalar do modo Organizar -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 

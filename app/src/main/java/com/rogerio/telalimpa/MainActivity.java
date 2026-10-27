@@ -84,10 +84,7 @@ public class MainActivity extends Activity {
     private static final String KEY_LAT = "city_lat";
     private static final String KEY_LON = "city_lon";
     private static final String KEY_HOME_SEEN = "home_seen";
-    private static final String KEY_CH_LIST = "channel_list";
     private static final String KEY_BG_MODE = "bg_mode";
-    private static final String KEY_CH_INFO = "channel_info_v1";
-    private static final String CH_USE_PREFIX = "chuse_";
     private static final String USE_PREFIX = "use_";
 
     private static final long WEATHER_EVERY = 30L * 60 * 1000;
@@ -105,7 +102,6 @@ public class MainActivity extends Activity {
     private static final int KIND_ORGANIZE = 2;
     private static final int KIND_DEFAULT = 3;
     private static final int KIND_CITY = 4;
-    private static final int KIND_CHANNELS = 5;
     private static final int KIND_BACKGROUND = 6;
 
     private static class Entry {
@@ -142,6 +138,8 @@ public class MainActivity extends Activity {
     private TextView captionSub;
     private TextView defaultHintView;
     private TextView tempView;
+    private WifiIcon wifiIcon;
+    private TextView wifiLabel;
     private TextView descView;
     private TextView rangeView;
 
@@ -151,8 +149,6 @@ public class MainActivity extends Activity {
     private boolean lastDefault = false;
     private TextView cityView;
     private volatile int weatherEpoch = 0;
-    private volatile boolean chBusy = false;
-    private long chTry = 0;
     private boolean goHome = false;
     private int columns = 6;
     private View firstTile;
@@ -375,6 +371,48 @@ public class MainActivity extends Activity {
         right.setOrientation(LinearLayout.VERTICAL);
         right.setGravity(Gravity.END);
 
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        buttons.setGravity(Gravity.CENTER_VERTICAL);
+
+        wifiIcon = new WifiIcon(this);
+        wifiLabel = new TextView(this);
+        wifiLabel.setTextColor(Color.WHITE);
+        wifiLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        wifiLabel.setPadding(dp(6), 0, 0, 0);
+        LinearLayout wifiInner = new LinearLayout(this);
+        wifiInner.setOrientation(LinearLayout.HORIZONTAL);
+        wifiInner.setGravity(Gravity.CENTER_VERTICAL);
+        wifiInner.setPadding(dp(10), 0, dp(12), 0);
+        wifiInner.addView(wifiIcon, new LinearLayout.LayoutParams(dp(22), dp(22)));
+        wifiInner.addView(wifiLabel);
+        View wifiBtn = smallButton(wifiInner, dp(0), new Runnable() {
+            @Override
+            public void run() {
+                openWifiSettings();
+            }
+        });
+        wifiBtn.setTag("btn:wifi");
+        buttons.addView(wifiBtn);
+
+        ImageView gear = new ImageView(this);
+        gear.setImageResource(android.R.drawable.ic_menu_preferences);
+        gear.setColorFilter(Color.WHITE);
+        gear.setPadding(dp(9), dp(9), dp(9), dp(9));
+        View gearBtn = smallButton(gear, dp(40), new Runnable() {
+            @Override
+            public void run() {
+                openSettings();
+            }
+        });
+        gearBtn.setTag("btn:settings");
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        glp.leftMargin = dp(6);
+        buttons.addView(gearBtn, glp);
+        right.addView(buttons);
+        updateWifi();
+
         tempView = new TextView(this);
         tempView.setTextColor(Color.WHITE);
         tempView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 40);
@@ -452,6 +490,7 @@ public class MainActivity extends Activity {
         greetingView.setText(greeting());
         dateView.setText(dateString());
         if (root != null) root.setBackground(backgroundDrawable());
+        updateWifi();
     }
 
     /** Degradê de fundo conforme o período do dia (aparece quando não há imagem). */
@@ -536,11 +575,6 @@ public class MainActivity extends Activity {
                 && now - prefs.getLong(KEY_RECS_TIME, 0) > RECS_EVERY) {
             recsTry = now;
             fetchRecs();
-        }
-        if (!Config.YOUTUBE_API_KEY.isEmpty() && !chBusy && now - chTry > RETRY_AFTER
-                && needsChannelInfo()) {
-            chTry = now;
-            fetchChannels();
         }
     }
 
@@ -935,9 +969,6 @@ public class MainActivity extends Activity {
                 sectionsHost.addView(tileRow(top, "top", false));
             }
 
-            addSection("Canais do YouTube");
-            sectionsHost.addView(scrollRow(channelsRow()));
-
             if (Config.TMDB_API_KEY.isEmpty()) {
                 addSection("Filmes e séries");
                 sectionsHost.addView(recsRow("movie"));
@@ -1010,7 +1041,6 @@ public class MainActivity extends Activity {
         }
         all.add(special(KIND_CITY, "Mudar cidade", android.R.drawable.ic_menu_mylocation));
         all.add(special(KIND_BACKGROUND, "Mudar fundo", android.R.drawable.ic_menu_gallery));
-        all.add(special(KIND_SETTINGS, "Configurações", android.R.drawable.ic_menu_preferences));
         all.add(special(KIND_ORGANIZE, manageMode ? "Concluir" : "Organizar",
                 manageMode ? android.R.drawable.ic_menu_save : android.R.drawable.ic_menu_edit));
 
@@ -1303,401 +1333,125 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ------------------------------------------------------------ meus canais do YouTube
+    // ------------------------------------------------------------ Wi-Fi e configurações
 
-    private List<String> channelList() {
-        String raw = prefs.getString(KEY_CH_LIST, null);
-        List<String> out = new ArrayList<>();
-        if (raw == null) {
-            out.addAll(Arrays.asList(Config.DEFAULT_CHANNELS));
-        } else {
-            for (String s : raw.split("\n")) {
-                if (!s.trim().isEmpty()) out.add(s.trim());
-            }
-        }
-        return out;
-    }
-
-    private void saveChannelList(List<String> list) {
-        prefs.edit().putString(KEY_CH_LIST, TextUtils.join("\n", list)).apply();
-    }
-
-    private JSONObject channelInfoAll() {
-        try {
-            String raw = prefs.getString(KEY_CH_INFO, null);
-            if (raw != null) return new JSONObject(raw);
-        } catch (Exception ignored) {
-        }
-        return new JSONObject();
-    }
-
-    private boolean needsChannelInfo() {
-        JSONObject all = channelInfoAll();
-        for (String q : channelList()) {
-            if (!all.has(q)) return true;
-        }
-        return false;
-    }
-
-    /** Linha de canais: os mais abertos pela Tela Limpa vêm primeiro; no fim, o botão Trocar canais. */
-    private LinearLayout channelsRow() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setClipChildren(false);
-        JSONObject all = channelInfoAll();
-        List<String> ordered = channelList();
-        Collections.sort(ordered, (a, b) ->
-                prefs.getInt(CH_USE_PREFIX + b, 0) - prefs.getInt(CH_USE_PREFIX + a, 0));
-        LinearLayout.LayoutParams lpE = new LinearLayout.LayoutParams(
-                dp(TILE_W + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpE.rightMargin = dp(8);
-        row.addView(appTile(special(KIND_CHANNELS, "Adicionar / trocar canal",
-                android.R.drawable.ic_menu_edit), "ch", false), lpE);
-        for (String q : ordered) {
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    dp(TILE_W + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.rightMargin = dp(8);
-            row.addView(channelTile(q, all.optJSONObject(q)), lp);
-        }
-
-        return row;
-    }
-
-    private View channelTile(final String q, JSONObject info) {
-        String title = info != null ? info.optString("title", "") : "";
-        if (title.isEmpty()) title = q.startsWith("@") ? q.substring(1) : q;
-        final String id = info != null ? info.optString("id", "") : "";
-        String thumb = info != null ? info.optString("thumb", "") : "";
-
-        LinearLayout item = new LinearLayout(this);
-        item.setOrientation(LinearLayout.VERTICAL);
-        item.setGravity(Gravity.CENTER_HORIZONTAL);
-        item.setPadding(dp(4), dp(4), dp(4), dp(6));
-        item.setFocusable(true);
-        item.setClickable(true);
-        item.setBackground(focusBackground());
-        item.setTag("ch:" + q);
-        addFocusZoom(item);
-
+    /** Botão pequeno com borda de foco; vira clicável pelo controle remoto. */
+    private View smallButton(View inner, int size, final Runnable action) {
         FrameLayout card = new FrameLayout(this);
         card.setBackground(cardBackground());
-        roundCorners(card, 12);
-
-        int av = dp(TILE_H * 62 / 100);
-        int[] palette = {0xFFE53935, 0xFF8E24AA, 0xFF3949AB, 0xFF00897B, 0xFFF4511E, 0xFF6D4C41};
-        GradientDrawable oval = new GradientDrawable();
-        oval.setShape(GradientDrawable.OVAL);
-        oval.setColor(palette[(q.hashCode() & 0x7fffffff) % palette.length]);
-
-        ImageView avatar = new ImageView(this);
-        avatar.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        avatar.setOutlineProvider(new ViewOutlineProvider() {
-            @Override
-            public void getOutline(View view, Outline outline) {
-                outline.setOval(0, 0, view.getWidth(), view.getHeight());
-            }
-        });
-        avatar.setClipToOutline(true);
-        card.addView(avatar, new FrameLayout.LayoutParams(av, av, Gravity.CENTER));
-
-        // Logo do YouTube no centro enquanto não há foto do canal
-        ImageView letter = new ImageView(this);
-        letter.setImageResource(R.drawable.ic_youtube);
-        card.addView(letter, new FrameLayout.LayoutParams(dp(52), dp(36), Gravity.CENTER));
-
-        if (!id.isEmpty() && !thumb.isEmpty()) loadChannelThumb(thumb, id, avatar, letter);
-
-        // Selo do YouTube no canto do cartão (quando já há foto)
-        ImageView yt = new ImageView(this);
-        yt.setVisibility(!id.isEmpty() && !thumb.isEmpty() ? View.VISIBLE : View.GONE);
-        yt.setImageResource(R.drawable.ic_youtube);
-        FrameLayout.LayoutParams ylp = new FrameLayout.LayoutParams(dp(26), dp(18), Gravity.TOP | Gravity.END);
-        ylp.topMargin = dp(6);
-        ylp.rightMargin = dp(6);
-        card.addView(yt, ylp);
-
-        TextView label = new TextView(this);
-        label.setText(title);
-        label.setTextColor(Color.WHITE);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        label.setShadowLayer(4f, 0f, 1f, 0xAA000000);
-        label.setSingleLine(true);
-        label.setEllipsize(TextUtils.TruncateAt.END);
-        label.setGravity(Gravity.CENTER);
-        label.setPadding(0, dp(6), 0, 0);
-
-        item.addView(card, new LinearLayout.LayoutParams(dp(TILE_W), dp(TILE_H)));
-        item.addView(label, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        item.setOnClickListener(new View.OnClickListener() {
+        roundCorners(card, 10);
+        card.addView(inner, new FrameLayout.LayoutParams(
+                size > 0 ? size : ViewGroup.LayoutParams.WRAP_CONTENT, dp(40), Gravity.CENTER));
+        FrameLayout outer = new FrameLayout(this);
+        outer.setPadding(dp(3), dp(3), dp(3), dp(3));
+        outer.setFocusable(true);
+        outer.setClickable(true);
+        outer.setBackground(focusBackground());
+        outer.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        addFocusZoom(outer);
+        outer.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                openChannel(q, id);
+                action.run();
             }
         });
-        if (firstTile == null) firstTile = item;
-        return item;
+        return outer;
     }
 
-    private void loadChannelThumb(final String url, final String id,
-                                  final ImageView target, final View letter) {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    File f = new File(getCacheDir(), "chan_" + id + ".jpg");
-                    if (!f.exists()) Net.download(url, f);
-                    final Bitmap bmp = BitmapFactory.decodeFile(f.getAbsolutePath());
-                    if (bmp != null) {
-                        runOnUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                target.setImageBitmap(bmp);
-                                letter.setVisibility(View.GONE);
-                            }
-                        });
-                    }
-                } catch (Exception ignored) {
-                    // sem internet: fica a letra inicial
-                }
-            }
-        }).start();
-    }
-
-    /** Abre o canal no app do YouTube da TV (ou o que houver). */
-    private void openChannel(String q, String id) {
-        prefs.edit().putInt(CH_USE_PREFIX + q, prefs.getInt(CH_USE_PREFIX + q, 0) + 1).apply();
-        String url;
-        if (!id.isEmpty()) {
-            url = "https://www.youtube.com/channel/" + id;
-        } else if (q.startsWith("@")) {
-            url = "https://www.youtube.com/" + Uri.encode(q, "@");
-        } else {
-            url = "https://www.youtube.com/results?search_query=" + Uri.encode(q);
-        }
-        Intent base = new Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        String[] pkgs = {"com.google.android.youtube.tv", "com.google.android.youtube"};
-        for (String p : pkgs) {
-            try {
-                startActivity(new Intent(base).setPackage(p));
-                return;
-            } catch (Exception ignored) {
-                // tenta o próximo
-            }
-        }
+    private void openSettings() {
         try {
-            startActivity(base);
+            startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         } catch (Exception ex) {
-            Toast.makeText(this, "Não foi possível abrir o YouTube", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Não foi possível abrir as configurações", Toast.LENGTH_SHORT).show();
         }
     }
 
-    /** Descobre id, nome e foto dos canais que ainda não foram consultados (precisa da chave do YouTube). */
-    private void fetchChannels() {
-        if (Config.YOUTUBE_API_KEY.isEmpty() || chBusy) return;
-        chBusy = true;
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    JSONObject all = channelInfoAll();
-                    boolean changed = false;
-                    for (String q : channelList()) {
-                        if (all.has(q)) continue;
-                        try {
-                            all.put(q, resolveChannel(q));
-                            changed = true;
-                        } catch (Exception ignored) {
-                            // tenta de novo mais tarde
-                        }
-                    }
-                    if (changed) {
-                        prefs.edit().putString(KEY_CH_INFO, all.toString()).apply();
-                        runOnUiThread(new Runnable() {
-                            @Override
-                            public void run() {
-                                render();
-                            }
-                        });
-                    }
-                } finally {
-                    chBusy = false;
+    /** Abre a tela de Wi-Fi do próprio Android: redes disponíveis, conectar e desconectar. */
+    private void openWifiSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception ex) {
+            openSettings();
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void updateWifi() {
+        if (wifiIcon == null) return;
+        int level = 0;
+        boolean on = false;
+        String text = "Sem rede";
+        try {
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.NetworkInfo ni = cm.getActiveNetworkInfo();
+            if (ni != null && ni.isConnected()) {
+                if (ni.getType() == android.net.ConnectivityManager.TYPE_ETHERNET) {
+                    on = true;
+                    level = 3;
+                    text = "Cabo";
+                } else if (ni.getType() == android.net.ConnectivityManager.TYPE_WIFI) {
+                    on = true;
+                    text = "Wi-Fi";
+                    android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                            getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                    int rssi = wm.getConnectionInfo().getRssi();
+                    level = rssi > -55 ? 3 : rssi > -67 ? 2 : rssi > -80 ? 1 : 0;
+                } else {
+                    on = true;
+                    level = 3;
+                    text = "Online";
                 }
             }
-        }).start();
-    }
-
-    private JSONObject resolveChannel(String q) throws Exception {
-        String key = Config.YOUTUBE_API_KEY;
-        String url;
-        if (q.startsWith("@")) {
-            url = "https://www.googleapis.com/youtube/v3/channels?part=snippet&forHandle="
-                    + Uri.encode(q) + "&key=" + key;
-        } else {
-            url = "https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=1&q="
-                    + Uri.encode(q) + "&key=" + key;
+        } catch (Exception ignored) {
+            // sem permissão ou sem Wi-Fi: mostra "Sem rede"
         }
-        JSONArray items = new JSONObject(Net.get(url)).optJSONArray("items");
-        JSONObject out = new JSONObject();
-        if (items == null || items.length() == 0) {
-            // canal não encontrado: guarda vazio para não consultar de novo
-            out.put("id", "");
-            out.put("title", "");
-            out.put("thumb", "");
-            return out;
+        wifiIcon.set(level, on);
+        wifiLabel.setText(text);
+    }
+
+    /** Ícone de sinal de Wi-Fi desenhado à mão (3 arcos + ponto). */
+    private static final class WifiIcon extends View {
+        private final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private int level;
+        private boolean on;
+
+        WifiIcon(Context c) {
+            super(c);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
         }
-        JSONObject it = items.getJSONObject(0);
-        JSONObject sn = it.getJSONObject("snippet");
-        String id = q.startsWith("@") ? it.getString("id") : sn.getString("channelId");
-        String thumb = "";
-        JSONObject th = sn.optJSONObject("thumbnails");
-        if (th != null) {
-            JSONObject m = th.optJSONObject("medium");
-            if (m == null) m = th.optJSONObject("default");
-            if (m != null) thumb = m.optString("url", "");
+
+        void set(int level, boolean on) {
+            this.level = level;
+            this.on = on;
+            invalidate();
         }
-        out.put("id", id);
-        out.put("title", sn.optString("title", q));
-        out.put("thumb", thumb);
-        return out;
-    }
 
-    private void showChannelsDialog() {
-        final String[] items = {"Adicionar canal", "Editar (trocar) um canal", "Remover canal", "Restaurar lista inicial"};
-        new AlertDialog.Builder(this)
-                .setTitle("Canais do YouTube")
-                .setItems(items, new android.content.DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(android.content.DialogInterface d, int which) {
-                        if (which == 0) askNewChannel();
-                        else if (which == 1) askEditChannel();
-                        else if (which == 2) askRemoveChannel();
-                        else restoreChannels();
-                    }
-                })
-                .show();
-    }
-
-    private void askNewChannel() {
-        final EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setHint("@nomedocanal (ou o nome do canal)");
-        new AlertDialog.Builder(this)
-                .setTitle("Adicionar canal")
-                .setView(input)
-                .setPositiveButton("Adicionar", new android.content.DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(android.content.DialogInterface d, int which) {
-                        addChannel(input.getText().toString().trim());
-                    }
-                })
-                .setNegativeButton("Cancelar", null)
-                .show();
-    }
-
-    private void addChannel(String q) {
-        if (q.isEmpty()) return;
-        List<String> list = channelList();
-        for (String s : list) {
-            if (s.equalsIgnoreCase(q)) {
-                Toast.makeText(this, "Esse canal já está na lista", Toast.LENGTH_SHORT).show();
-                return;
+        @Override
+        protected void onDraw(android.graphics.Canvas c) {
+            float w = getWidth();
+            float h = getHeight();
+            float cx = w / 2f;
+            float cy = h * 0.88f;
+            p.setStrokeWidth(w * 0.11f);
+            for (int i = 1; i <= 3; i++) {
+                boolean lit = on && i <= Math.max(level, on ? 1 : 0) + (level == 0 && on ? 0 : 0);
+                p.setColor(lit ? Color.WHITE : 0x55FFFFFF);
+                float r = w * 0.2f * i + w * 0.04f;
+                android.graphics.RectF oval = new android.graphics.RectF(cx - r, cy - r, cx + r, cy + r);
+                c.drawArc(oval, 225, 90, false, p);
+            }
+            p.setStyle(android.graphics.Paint.Style.FILL);
+            p.setColor(on ? Color.WHITE : 0x55FFFFFF);
+            c.drawCircle(cx, cy, w * 0.07f, p);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            if (!on) {
+                p.setColor(0xFFFF6B6B);
+                c.drawLine(w * 0.15f, h * 0.1f, w * 0.85f, h * 0.9f, p);
             }
         }
-        list.add(q);
-        saveChannelList(list);
-        chTry = 0;
-        fetchChannels();
-        render();
-        Toast.makeText(this, "Canal adicionado", Toast.LENGTH_SHORT).show();
-    }
-
-    /** Escolhe um canal da lista e troca por outro (@ ou nome), mantendo a posição. */
-    private void askEditChannel() {
-        final List<String> list = channelList();
-        if (list.isEmpty()) {
-            Toast.makeText(this, "A lista de canais está vazia", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        JSONObject all = channelInfoAll();
-        String[] names = new String[list.size()];
-        for (int i = 0; i < list.size(); i++) {
-            JSONObject info = all.optJSONObject(list.get(i));
-            String t = info != null ? info.optString("title", "") : "";
-            names[i] = t.isEmpty() ? list.get(i) : t + " (" + list.get(i) + ")";
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("Editar qual canal?")
-                .setItems(names, new android.content.DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(android.content.DialogInterface d, int which) {
-                        askReplaceChannel(list, which);
-                    }
-                })
-                .setNegativeButton("Cancelar", null)
-                .show();
-    }
-
-    private void askReplaceChannel(final List<String> list, final int index) {
-        final EditText input = new EditText(this);
-        input.setSingleLine(true);
-        input.setText(list.get(index));
-        input.setSelectAllOnFocus(true);
-        new AlertDialog.Builder(this)
-                .setTitle("Novo @ ou nome do canal")
-                .setView(input)
-                .setPositiveButton("Salvar", new android.content.DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(android.content.DialogInterface d, int which) {
-                        String q = input.getText().toString().trim();
-                        if (q.isEmpty()) return;
-                        list.set(index, q);
-                        saveChannelList(list);
-                        chTry = 0;
-                        fetchChannels();
-                        render();
-                        Toast.makeText(MainActivity.this, "Canal atualizado", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .setNegativeButton("Cancelar", null)
-                .show();
-    }
-
-    private void askRemoveChannel() {
-        final List<String> list = channelList();
-        if (list.isEmpty()) {
-            Toast.makeText(this, "A lista de canais está vazia", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        JSONObject all = channelInfoAll();
-        String[] names = new String[list.size()];
-        for (int i = 0; i < list.size(); i++) {
-            JSONObject info = all.optJSONObject(list.get(i));
-            String t = info != null ? info.optString("title", "") : "";
-            names[i] = t.isEmpty() ? list.get(i) : t + " (" + list.get(i) + ")";
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("Remover qual canal?")
-                .setItems(names, new android.content.DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(android.content.DialogInterface d, int which) {
-                        list.remove(which);
-                        saveChannelList(list);
-                        render();
-                        Toast.makeText(MainActivity.this, "Canal removido", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .setNegativeButton("Cancelar", null)
-                .show();
-    }
-
-    private void restoreChannels() {
-        prefs.edit().remove(KEY_CH_LIST).apply();
-        chTry = 0;
-        fetchChannels();
-        render();
-        Toast.makeText(this, "Lista inicial restaurada", Toast.LENGTH_SHORT).show();
     }
 
     // ------------------------------------------------------------ cidade do clima
@@ -1898,21 +1652,13 @@ public class MainActivity extends Activity {
     private void onTileClick(Entry e) {
         switch (e.kind) {
             case KIND_SETTINGS:
-                try {
-                    startActivity(new Intent(Settings.ACTION_SETTINGS)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                } catch (Exception ex) {
-                    Toast.makeText(this, "Não foi possível abrir as configurações", Toast.LENGTH_SHORT).show();
-                }
+                openSettings();
                 break;
             case KIND_DEFAULT:
                 requestDefaultHome();
                 break;
             case KIND_CITY:
                 showCityDialog();
-                break;
-            case KIND_CHANNELS:
-                showChannelsDialog();
                 break;
             case KIND_BACKGROUND:
                 showBackgroundDialog();
