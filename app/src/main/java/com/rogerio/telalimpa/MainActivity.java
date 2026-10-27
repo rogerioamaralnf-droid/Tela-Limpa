@@ -237,6 +237,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         updateHeader();
+        if (bgMode().equals("custom")) applyBackgroundMode();
     }
 
     @Override
@@ -1273,7 +1274,8 @@ public class MainActivity extends Activity {
             {"roxo", "Roxo"},
             {"verde", "Verde floresta"},
             {"sol", "Pôr do sol"},
-            {"grafite", "Grafite"}
+            {"grafite", "Grafite"},
+            {"custom", "Minha imagem (escolher de uma pasta)"}
     };
 
     private String bgMode() {
@@ -1305,13 +1307,89 @@ public class MainActivity extends Activity {
                 .setSingleChoiceItems(names, checked, new android.content.DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(android.content.DialogInterface d, int which) {
-                        prefs.edit().putString(KEY_BG_MODE, BG_THEMES[which][0]).apply();
                         d.dismiss();
+                        if (BG_THEMES[which][0].equals("custom")) {
+                            pickBackgroundImage();
+                            return;
+                        }
+                        prefs.edit().putString(KEY_BG_MODE, BG_THEMES[which][0]).apply();
                         applyBackgroundMode();
                     }
                 })
                 .setNegativeButton("Cancelar", null)
                 .show();
+    }
+
+    private static final int REQ_PICK_IMAGE = 4711;
+
+    private File customBgFile() {
+        return new File(getFilesDir(), "custom_bg.jpg");
+    }
+
+    /** Abre o seletor de arquivos do Android para escolher uma imagem de uma pasta. */
+    private void pickBackgroundImage() {
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("image/*");
+        try {
+            startActivityForResult(pick, REQ_PICK_IMAGE);
+        } catch (Exception e1) {
+            try {
+                startActivityForResult(new Intent(Intent.ACTION_GET_CONTENT).setType("image/*"), REQ_PICK_IMAGE);
+            } catch (Exception e2) {
+                Toast.makeText(this, "Esta TV não tem seletor de arquivos. Instale um gerenciador de arquivos (ex.: X-plore) e tente de novo.",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, final Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PICK_IMAGE || resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = false;
+                try {
+                    // 1ª leitura: só o tamanho, para reduzir imagens enormes e poupar memória
+                    BitmapFactory.Options o = new BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    java.io.InputStream in = getContentResolver().openInputStream(uri);
+                    BitmapFactory.decodeStream(in, null, o);
+                    if (in != null) in.close();
+                    int sample = 1;
+                    while (o.outWidth / sample > 2200) sample *= 2;
+                    BitmapFactory.Options o2 = new BitmapFactory.Options();
+                    o2.inSampleSize = sample;
+                    in = getContentResolver().openInputStream(uri);
+                    Bitmap bmp = BitmapFactory.decodeStream(in, null, o2);
+                    if (in != null) in.close();
+                    if (bmp != null) {
+                        java.io.FileOutputStream out = new java.io.FileOutputStream(customBgFile());
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 90, out);
+                        out.close();
+                        ok = true;
+                    }
+                } catch (Exception ignored) {
+                    // cai no aviso abaixo
+                }
+                final boolean done = ok;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (done) {
+                            prefs.edit().putString(KEY_BG_MODE, "custom").apply();
+                            applyBackgroundMode();
+                        } else {
+                            Toast.makeText(MainActivity.this, "Não foi possível usar essa imagem",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }
+                });
+            }
+        }).start();
     }
 
     private void applyBackgroundMode() {
@@ -1323,6 +1401,14 @@ public class MainActivity extends Activity {
             currentBackdrop = "";
             slideIndex = -1;
             nextBackdrop();
+        } else if (bgMode().equals("custom") && customBgFile().exists()) {
+            Bitmap bmp = BitmapFactory.decodeFile(customBgFile().getAbsolutePath());
+            bgImage2.setImageDrawable(null);
+            bgImage2.setAlpha(0f);
+            bgImage.setImageBitmap(bmp);
+            bgImage.setAlpha(1f);
+            captionBox.setAlpha(0f);
+            captionBox.setVisibility(View.GONE);
         } else {
             bgImage.setImageDrawable(null);
             bgImage2.setImageDrawable(null);
