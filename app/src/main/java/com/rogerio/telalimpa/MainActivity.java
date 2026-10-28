@@ -1228,8 +1228,7 @@ public class MainActivity extends Activity {
 
     private Drawable focusBackground() {
         GradientDrawable focused = new GradientDrawable();
-        focused.setColor(0x44FFFFFF);
-        focused.setStroke(dp(2), Color.WHITE);
+        focused.setColor(0x33FFFFFF);
         focused.setCornerRadius(dp(16));
         ColorDrawable normal = new ColorDrawable(Color.TRANSPARENT);
         StateListDrawable s = new StateListDrawable();
@@ -1806,8 +1805,10 @@ public class MainActivity extends Activity {
         v.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View view, boolean hasFocus) {
-                float s = hasFocus ? 1.05f : 1f;
-                view.animate().scaleX(s).scaleY(s).setDuration(120).start();
+                // O item selecionado cresce e passa por cima dos vizinhos (sem borda)
+                float s = hasFocus ? 1.14f : 1f;
+                view.setTranslationZ(hasFocus ? dp(16) : 0f);
+                view.animate().scaleX(s).scaleY(s).setDuration(160).start();
             }
         });
     }
