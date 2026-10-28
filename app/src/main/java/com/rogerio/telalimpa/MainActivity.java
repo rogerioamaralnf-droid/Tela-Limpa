@@ -785,6 +785,10 @@ public class MainActivity extends Activity {
 
     /** Passa para a próxima imagem da apresentação de fundo. */
     private void nextBackdrop() {
+        if (bgMode().equals("custom")) {
+            nextCustom();
+            return;
+        }
         if (backdropBusy || !bgMode().equals("movies")) return;
         List<JSONObject> list = backdropList();
         if (list.isEmpty()) return;
@@ -1275,7 +1279,7 @@ public class MainActivity extends Activity {
             {"verde", "Verde floresta"},
             {"sol", "Pôr do sol"},
             {"grafite", "Grafite"},
-            {"custom", "Minha imagem (escolher de uma pasta)"}
+            {"custom", "Minhas imagens (escolher de uma pasta)"}
     };
 
     private String bgMode() {
@@ -1321,21 +1325,35 @@ public class MainActivity extends Activity {
     }
 
     private static final int REQ_PICK_IMAGE = 4711;
+    private int customIndex = -1;
+    private volatile boolean customBusy = false;
 
-    private File customBgFile() {
-        return new File(getFilesDir(), "custom_bg.jpg");
+    private File customDir() {
+        return new File(getFilesDir(), "custom_bgs");
     }
 
-    /** Abre o seletor de arquivos do Android para escolher uma imagem de uma pasta. */
+    private List<File> customFiles() {
+        File[] fs = customDir().listFiles();
+        List<File> out = new ArrayList<>();
+        if (fs != null) {
+            Arrays.sort(fs);
+            for (File x : fs) if (x.getName().endsWith(".jpg")) out.add(x);
+        }
+        return out;
+    }
+
+    /** Abre o seletor de arquivos do Android; dá para marcar várias imagens de uma vez. */
     private void pickBackgroundImage() {
         Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
+                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                 .setType("image/*");
         try {
             startActivityForResult(pick, REQ_PICK_IMAGE);
         } catch (Exception e1) {
             try {
-                startActivityForResult(new Intent(Intent.ACTION_GET_CONTENT).setType("image/*"), REQ_PICK_IMAGE);
+                startActivityForResult(new Intent(Intent.ACTION_GET_CONTENT)
+                        .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true).setType("image/*"), REQ_PICK_IMAGE);
             } catch (Exception e2) {
                 Toast.makeText(this, "Esta TV não tem seletor de arquivos. Instale um gerenciador de arquivos (ex.: X-plore) e tente de novo.",
                         Toast.LENGTH_LONG).show();
@@ -1346,46 +1364,110 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, final Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQ_PICK_IMAGE || resultCode != RESULT_OK || data == null || data.getData() == null) return;
-        final Uri uri = data.getData();
+        if (requestCode != REQ_PICK_IMAGE || resultCode != RESULT_OK || data == null) return;
+        final List<Uri> uris = new ArrayList<>();
+        if (data.getClipData() != null) {
+            for (int k = 0; k < data.getClipData().getItemCount(); k++) {
+                uris.add(data.getClipData().getItemAt(k).getUri());
+            }
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        if (uris.isEmpty()) return;
         new Thread(new Runnable() {
             @Override
             public void run() {
-                boolean ok = false;
-                try {
-                    // 1ª leitura: só o tamanho, para reduzir imagens enormes e poupar memória
-                    BitmapFactory.Options o = new BitmapFactory.Options();
-                    o.inJustDecodeBounds = true;
-                    java.io.InputStream in = getContentResolver().openInputStream(uri);
-                    BitmapFactory.decodeStream(in, null, o);
-                    if (in != null) in.close();
-                    int sample = 1;
-                    while (o.outWidth / sample > 2200) sample *= 2;
-                    BitmapFactory.Options o2 = new BitmapFactory.Options();
-                    o2.inSampleSize = sample;
-                    in = getContentResolver().openInputStream(uri);
-                    Bitmap bmp = BitmapFactory.decodeStream(in, null, o2);
-                    if (in != null) in.close();
-                    if (bmp != null) {
-                        java.io.FileOutputStream out = new java.io.FileOutputStream(customBgFile());
-                        bmp.compress(Bitmap.CompressFormat.JPEG, 90, out);
-                        out.close();
-                        ok = true;
+                File tmp = new File(getFilesDir(), "custom_bgs_new");
+                deleteDir(tmp);
+                tmp.mkdirs();
+                int saved = 0;
+                for (Uri uri : uris) {
+                    if (saved >= 30) break;
+                    try {
+                        // 1ª leitura: só o tamanho, para reduzir imagens enormes e poupar memória
+                        BitmapFactory.Options o = new BitmapFactory.Options();
+                        o.inJustDecodeBounds = true;
+                        java.io.InputStream in = getContentResolver().openInputStream(uri);
+                        BitmapFactory.decodeStream(in, null, o);
+                        if (in != null) in.close();
+                        int sample = 1;
+                        while (o.outWidth / sample > 2200) sample *= 2;
+                        BitmapFactory.Options o2 = new BitmapFactory.Options();
+                        o2.inSampleSize = sample;
+                        in = getContentResolver().openInputStream(uri);
+                        Bitmap bmp = BitmapFactory.decodeStream(in, null, o2);
+                        if (in != null) in.close();
+                        if (bmp != null) {
+                            java.io.FileOutputStream out = new java.io.FileOutputStream(
+                                    new File(tmp, String.format(Locale.US, "img%02d.jpg", saved)));
+                            bmp.compress(Bitmap.CompressFormat.JPEG, 90, out);
+                            out.close();
+                            bmp.recycle();
+                            saved++;
+                        }
+                    } catch (Exception ignored) {
+                        // pula essa imagem
                     }
-                } catch (Exception ignored) {
-                    // cai no aviso abaixo
                 }
-                final boolean done = ok;
+                final int total = saved;
+                if (total > 0) {
+                    deleteDir(customDir());
+                    tmp.renameTo(customDir());
+                } else {
+                    deleteDir(tmp);
+                }
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        if (done) {
+                        if (total > 0) {
                             prefs.edit().putString(KEY_BG_MODE, "custom").apply();
                             applyBackgroundMode();
+                            Toast.makeText(MainActivity.this, total + (total == 1 ? " imagem" : " imagens")
+                                    + " no fundo", Toast.LENGTH_SHORT).show();
                         } else {
-                            Toast.makeText(MainActivity.this, "Não foi possível usar essa imagem",
+                            Toast.makeText(MainActivity.this, "Não foi possível usar essas imagens",
                                     Toast.LENGTH_LONG).show();
                         }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void deleteDir(File d) {
+        File[] fs = d.listFiles();
+        if (fs != null) for (File x : fs) x.delete();
+        d.delete();
+    }
+
+    /** Passa para a próxima imagem escolhida, com a mesma transição suave dos filmes. */
+    private void nextCustom() {
+        final List<File> files = customFiles();
+        if (files.isEmpty() || customBusy) return;
+        if (customIndex >= 0 && files.size() == 1) return; // uma só: fica parada
+        customIndex++;
+        final File pick = files.get(customIndex % files.size());
+        customBusy = true;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final Bitmap bmp = BitmapFactory.decodeFile(pick.getAbsolutePath());
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        customBusy = false;
+                        if (bmp == null || !bgMode().equals("custom")) return;
+                        bgImage2.animate().cancel();
+                        bgImage2.setImageBitmap(bmp);
+                        bgImage2.setAlpha(0f);
+                        bgImage2.animate().alpha(1f).setDuration(1500).withEndAction(new Runnable() {
+                            @Override
+                            public void run() {
+                                bgImage.setImageBitmap(bmp);
+                                bgImage.setAlpha(1f);
+                                bgImage2.setAlpha(0f);
+                            }
+                        }).start();
                     }
                 });
             }
@@ -1401,14 +1483,15 @@ public class MainActivity extends Activity {
             currentBackdrop = "";
             slideIndex = -1;
             nextBackdrop();
-        } else if (bgMode().equals("custom") && customBgFile().exists()) {
-            Bitmap bmp = BitmapFactory.decodeFile(customBgFile().getAbsolutePath());
+        } else if (bgMode().equals("custom") && !customFiles().isEmpty()) {
+            bgImage.setImageDrawable(null);
             bgImage2.setImageDrawable(null);
+            bgImage.setAlpha(0f);
             bgImage2.setAlpha(0f);
-            bgImage.setImageBitmap(bmp);
-            bgImage.setAlpha(1f);
             captionBox.setAlpha(0f);
             captionBox.setVisibility(View.GONE);
+            customIndex = -1;
+            nextCustom();
         } else {
             bgImage.setImageDrawable(null);
             bgImage2.setImageDrawable(null);
