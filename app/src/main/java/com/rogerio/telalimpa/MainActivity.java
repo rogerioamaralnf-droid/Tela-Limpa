@@ -1042,7 +1042,8 @@ public class MainActivity extends Activity {
         for (Entry e : list) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     dp((big ? BIG_W : TILE_W) + 8), ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.rightMargin = dp(8);
+            // Favoritos (cartões grandes) ganham mais espaço entre si
+            lp.rightMargin = big ? dp(28) : dp(8);
             row.addView(appTile(e, section, big), lp);
         }
         return row;
