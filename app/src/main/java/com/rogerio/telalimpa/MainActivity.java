@@ -211,6 +211,10 @@ public class MainActivity extends Activity {
         sectionsHost.setOrientation(LinearLayout.VERTICAL);
         sectionsHost.setClipChildren(false);
         content.setClipChildren(false);
+        // Sem isto o Android corta tudo que passa da margem de 48dp (era o que cortava o item ampliado)
+        content.setClipToPadding(false);
+        scroll.setClipToPadding(false);
+        scroll.setClipChildren(false);
         content.addView(sectionsHost);
 
         scroll.addView(content);
