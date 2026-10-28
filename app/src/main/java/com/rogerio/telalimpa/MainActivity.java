@@ -400,6 +400,30 @@ public class MainActivity extends Activity {
         wifiBtn.setTag("btn:wifi");
         buttons.addView(wifiBtn);
 
+        InputIcon inputIcon = new InputIcon(this);
+        TextView inputLabel = new TextView(this);
+        inputLabel.setText("Entradas");
+        inputLabel.setTextColor(Color.WHITE);
+        inputLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        inputLabel.setPadding(dp(6), 0, 0, 0);
+        LinearLayout inputInner = new LinearLayout(this);
+        inputInner.setOrientation(LinearLayout.HORIZONTAL);
+        inputInner.setGravity(Gravity.CENTER_VERTICAL);
+        inputInner.setPadding(dp(10), 0, dp(12), 0);
+        inputInner.addView(inputIcon, new LinearLayout.LayoutParams(dp(22), dp(22)));
+        inputInner.addView(inputLabel);
+        View inputBtn = smallButton(inputInner, dp(0), new Runnable() {
+            @Override
+            public void run() {
+                showInputsDialog();
+            }
+        });
+        inputBtn.setTag("btn:inputs");
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ilp.leftMargin = dp(6);
+        buttons.addView(inputBtn, ilp);
+
         ImageView gear = new ImageView(this);
         gear.setImageResource(android.R.drawable.ic_menu_preferences);
         gear.setColorFilter(Color.WHITE);
@@ -1508,6 +1532,79 @@ public class MainActivity extends Activity {
             bgImage2.setAlpha(0f);
             captionBox.setAlpha(0f);
             captionBox.setVisibility(View.GONE);
+        }
+    }
+
+    // ------------------------------------------------------------ entradas da TV (HDMI, AV...)
+
+    /** Lista as entradas da TV (HDMI 1, HDMI 2, AV...) e muda para a escolhida. */
+    private void showInputsDialog() {
+        final List<String> ids = new ArrayList<>();
+        final List<String> names = new ArrayList<>();
+        try {
+            android.media.tv.TvInputManager tm =
+                    (android.media.tv.TvInputManager) getSystemService(Context.TV_INPUT_SERVICE);
+            for (android.media.tv.TvInputInfo info : tm.getTvInputList()) {
+                if (!info.isPassthroughInput()) continue;
+                CharSequence custom = info.loadCustomLabel(this);
+                CharSequence label = custom != null && custom.length() > 0 ? custom : info.loadLabel(this);
+                ids.add(info.getId());
+                names.add(String.valueOf(label));
+            }
+        } catch (Exception ignored) {
+            // sem suporte a entradas: cai na tela de configurações abaixo
+        }
+        if (ids.isEmpty()) {
+            Toast.makeText(this, "Não encontrei as entradas desta TV. Abrindo as configurações.",
+                    Toast.LENGTH_LONG).show();
+            openSettings();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Entradas da TV")
+                .setItems(names.toArray(new String[0]), new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        openInput(ids.get(which));
+                    }
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void openInput(String inputId) {
+        try {
+            Uri uri = android.media.tv.TvContract.buildChannelUriForPassthroughInput(inputId);
+            startActivity(new Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (Exception ex) {
+            Toast.makeText(this, "Não foi possível mudar para essa entrada. Use o botão Fonte do controle.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Ícone de entrada: tela com uma seta entrando. */
+    private static final class InputIcon extends View {
+        private final android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+        InputIcon(Context c) {
+            super(c);
+            p.setStyle(android.graphics.Paint.Style.STROKE);
+            p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+            p.setStrokeJoin(android.graphics.Paint.Join.ROUND);
+            p.setColor(Color.WHITE);
+        }
+
+        @Override
+        protected void onDraw(android.graphics.Canvas c) {
+            float w = getWidth();
+            float h = getHeight();
+            p.setStrokeWidth(w * 0.1f);
+            c.drawRoundRect(new android.graphics.RectF(w * 0.3f, h * 0.15f, w * 0.92f, h * 0.85f),
+                    w * 0.1f, w * 0.1f, p);
+            float y = h * 0.5f;
+            c.drawLine(w * 0.05f, y, w * 0.6f, y, p);
+            c.drawLine(w * 0.42f, y - h * 0.16f, w * 0.6f, y, p);
+            c.drawLine(w * 0.42f, y + h * 0.16f, w * 0.6f, y, p);
         }
     }
 
