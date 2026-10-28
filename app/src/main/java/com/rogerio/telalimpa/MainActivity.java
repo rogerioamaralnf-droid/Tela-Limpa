@@ -971,7 +971,7 @@ public class MainActivity extends Activity {
             if (top.size() > columns) top = new ArrayList<>(top.subList(0, columns));
             if (!top.isEmpty()) {
                 addSection("Mais usados");
-                sectionsHost.addView(tileRow(top, "top", false));
+                sectionsHost.addView(scrollRow(tileRow(top, "top", false)));
             }
 
             if (Config.TMDB_API_KEY.isEmpty()) {
@@ -1027,8 +1027,14 @@ public class MainActivity extends Activity {
         hs.setOverScrollMode(View.OVER_SCROLL_NEVER);
         hs.setClipToPadding(false);
         hs.setClipChildren(false);
-        hs.setPadding(dp(6), dp(10), dp(6), dp(10));
+        // Folga extra nas bordas para o item selecionado crescer sem ser cortado;
+        // a margem negativa devolve o alinhamento original.
+        hs.setPadding(dp(26), dp(20), dp(26), dp(20));
         hs.addView(row);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(-dp(20), -dp(10), -dp(20), -dp(10));
+        hs.setLayoutParams(lp);
         return hs;
     }
 
